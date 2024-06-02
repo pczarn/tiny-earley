@@ -1,0 +1,18 @@
+[package]
+name = "tiny-earley"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "lib.rs"
+
+[benches]
+path = "bench_parser.rs"
+
+[dependencies]
+
+[features]
+default = ["debug"]
+debug = []
+simple = []
+extra_inline = []
