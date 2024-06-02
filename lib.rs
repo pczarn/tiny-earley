@@ -1,4 +1,9 @@
 #![feature(stmt_expr_attributes)]
+#![feature(test)]
+
+extern crate test;
+
+use test::Bencher;
 
 use std::collections::BinaryHeap;
 #[cfg(feature = "debug")]
@@ -845,3 +850,36 @@ pub fn calc(expr: &str) -> f64 {
 fn test_parse() {
     assert_eq!(calc("1.0 + 2.0"), 3.0);
 }
+
+#[bench]
+fn bench_parser(bench: &mut Bencher) {
+    let recognizer = calc_recognizer();
+    bench.bytes = 9;
+    bench.iter(|| {
+        let mut parser = recognizer.clone();
+        parser.parse("1.0 + 2.0")
+    });
+}
+
+#[bench]
+fn bench_parser2(bench: &mut Bencher) {
+    let recognizer = calc_recognizer();
+    bench.bytes = 76;
+    bench.iter(|| {
+        let mut parser = recognizer.clone();
+        parser.parse("1.0 + 2.0 * 3.0 + 1.0 + 2.0 * 3.0 + 1.0 + 2.0 * 3.0 / 1.0 + 2.0 * 3.01234234")
+    });
+}
+
+#[bench]
+fn bench_parser3(bench: &mut Bencher) {
+    let recognizer = calc_recognizer();
+    bench.bytes = 68 + 92 + 74;
+    bench.iter(|| {
+        let mut parser = recognizer.clone();
+        parser.parse("1.0 + (2.0 * 3.0 + (1.0 + 2.0 * 3.0) + 1.0) + 2.0 * 3.0 / 1.0 + 2.0 \
+        * 3.01234234 + (2.0 * 3.0 + (1.0 + 2.0 * 3.0) + 1.0) + 2.0 * 3.0 / 1.0 + 2.0 * 3.01234234 + \
+        (2.0 * 3.0 + (1.0 + 2.0 * 3.0) + 1.0) + 2.0 * 3.0 / 1.0 + 2.0 * 3.01234234")
+    });
+}
+
