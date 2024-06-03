@@ -12,7 +12,12 @@ path = "bench_parser.rs"
 [dependencies]
 
 [features]
-default = ["debug"]
+default = ["debug", "simplest_forest"]
 debug = []
 simple = []
 extra_inline = []
+vec2d = []
+simplest_forest = []
+simple_forest = []
+compact_forest = []
+linked_forest = []

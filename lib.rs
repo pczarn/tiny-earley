@@ -3,12 +3,19 @@
 
 extern crate test;
 
+#[cfg_attr(all(not(feature = "simple_forest"), not(feature = "compact_forest"), not(feature = "linked_forest")), path = "simplest_forest.rs")]
+#[cfg_attr(feature = "simple_forest", path = "simple_forest.rs")]
+#[cfg_attr(feature = "compact_forest", path = "compact_forest.rs")]
+#[cfg_attr(feature = "linked_forest", path = "linked_forest.rs")]
+mod forest;
+
 use test::Bencher;
 
-use std::collections::BinaryHeap;
+use std::{collections::BinaryHeap, env::Args, ops::Index};
 #[cfg(feature = "debug")]
 use std::collections::{BTreeMap, BTreeSet};
-use std::mem;
+
+use self::forest::*;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd)]
 pub struct Symbol(u32);
@@ -49,39 +56,169 @@ struct PredictionTransition {
     is_unary: bool,
 }
 
-// Forest
-
-#[derive(Clone)]
-pub struct Forest {
-    graph: Vec<Node>,
-    eval: Vec<Option<usize>>,
-}
-
-#[derive(Clone)]
-enum Node {
-    Product {
-        action: u32,
-        left_factor: NodeHandle,
-        right_factor: Option<NodeHandle>,
-    },
-    Leaf {
-        terminal: Symbol,
-        values: u32,
-    },
-}
-
-const NULL_ACTION: u32 = !0;
-
 // Recognizer
 
 #[derive(Clone)]
 pub struct Recognizer<const S: usize> {
     tables: Tables<S>,
-    earley_chart: Vec<EarleySet<S>>,
-    next_set: EarleySet<S>,
+    earley_chart: EarleyChart<S>,
     complete: BinaryHeap<CompletedItem>,
     pub forest: Forest,
     pub finished_node: Option<NodeHandle>,
+}
+
+#[cfg(feature = "vec2d")]
+#[derive(Clone)]
+struct EarleyChart<const S: usize> {
+    predicted: Vec<[bool; S]>,
+    indices: Vec<usize>,
+    items: Vec<Item>,
+}
+
+#[cfg(not(feature = "vec2d"))]
+#[derive(Clone)]
+struct EarleyChart<const S: usize> {
+    sets: Vec<EarleySet<S>>,
+}
+
+#[cfg(feature = "vec2d")]
+impl<const S: usize> EarleyChart<S> {
+    fn next_set(&mut self, predicted: Option<[bool; S]>) {
+        self.predicted.push(predicted.unwrap_or([false; S]));
+        self.indices.push(self.items.len());
+    }
+
+    fn new() -> Self {
+        EarleyChart {
+            predicted: vec![],
+            indices: vec![],
+            items: vec![],
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.indices.len()
+    }
+
+    fn predicted(&self, index: usize) -> &[bool] {
+        &self.predicted[index][..]
+    }
+
+    fn medial(&mut self) -> &mut Vec<Item> {
+        &mut self.items
+    }
+
+    fn next_medial(&self) -> &[Item] {
+        &self.items[self.indices[self.indices.len() - 1] .. ]
+    }
+
+    fn last(&self) -> EarleySetRef {
+        let items = &self.items[self.indices[self.indices.len() - 1] ..];
+        let predicted = &self.predicted.last().unwrap()[..];
+        EarleySetRef {
+            items,
+            predicted,
+        }
+    }
+
+    fn next_to_last(&self) -> EarleySetRef {
+        let items = &self.items[self.indices[self.indices.len() - 2] .. self.indices[self.indices.len() - 1]];
+        let predicted = &self.predicted[self.predicted.len() - 2][..];
+        EarleySetRef {
+            items,
+            predicted,
+        }
+    }
+
+    fn last_mut(&mut self) -> EarleySetMut {
+        EarleySetMut {
+            items: &mut self.items[self.indices[self.indices.len() - 1] ..],
+            predicted: &mut self.predicted.last_mut().unwrap()[..]
+        }
+    }
+}
+
+#[cfg(not(feature = "vec2d"))]
+impl<const S: usize> EarleyChart<S> {
+    fn next_set(&mut self, predicted: Option<[bool; S]>) {
+        self.sets.push(EarleySet { predicted: predicted.unwrap_or([false; S]), medial: vec![] });
+    }
+
+    fn new() -> Self {
+        EarleyChart {
+            sets: vec![],
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.sets.len()
+    }
+
+    fn push(&mut self, set: EarleySet<S>) {
+        self.sets.push(set);
+    }
+
+    fn predicted(&self, index: usize) -> &[bool] {
+        &self.sets[index].predicted[..]
+    }
+
+    fn last(&self) -> EarleySetRef {
+        let last = self.sets.last().unwrap();
+        EarleySetRef {
+            items: &last.medial[..],
+            predicted: &last.predicted[..],
+        }
+    }
+
+    fn next_to_last(&self) -> EarleySetRef {
+        let last = &self.sets[self.sets.len() - 2];
+        EarleySetRef {
+            items: &last.medial[..],
+            predicted: &last.predicted[..],
+        }
+    }
+
+    fn medial(&mut self) -> &mut Vec<Item> {
+        &mut self.sets.last_mut().unwrap().medial
+    }
+
+    fn next_medial(&self) -> &[Item] {
+        &self.sets.last().unwrap().medial[..]
+    }
+
+    fn last_mut(&mut self) -> EarleySetMut {
+        let last = self.sets.last_mut().unwrap();
+        EarleySetMut {
+        items: &mut last.medial[..],
+        predicted: &mut last.predicted[..]
+        }
+    }
+}
+
+struct EarleySetMut<'a> {
+    items: &'a mut [Item],
+    predicted: &'a mut [bool],
+}
+
+struct EarleySetRef<'a> {
+    items: &'a [Item],
+    predicted: &'a [bool],
+}
+
+#[cfg(feature = "vec2d")]
+impl<const S: usize> Index<usize> for EarleyChart<S> {
+    type Output = [Item];
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.items[self.indices[index] .. self.indices[index + 1]]
+    }
+}
+
+#[cfg(not(feature = "vec2d"))]
+impl<const S: usize> Index<usize> for EarleyChart<S> {
+    type Output = [Item];
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.sets[index].medial[..]
+    }
 }
 
 #[derive(Clone)]
@@ -106,15 +243,20 @@ struct CompletedItem {
     right_node: Option<NodeHandle>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
-pub struct NodeHandle(usize);
-
 trait UnionWith {
-    fn union_with(&mut self, other: &Self);
+    fn union_with(&mut self, other: &[bool]);
 }
 
 impl<const S: usize> UnionWith for [bool; S] {
-    fn union_with(&mut self, other: &Self) {
+    fn union_with(&mut self, other: &[bool]) {
+        for (dst, &src) in self.iter_mut().zip(other.iter()) {
+            *dst |= src;
+        }
+    }
+}
+
+impl<'a> UnionWith for &'a  mut [bool] {
+    fn union_with(&mut self, other: &[bool]) {
         for (dst, &src) in self.iter_mut().zip(other.iter()) {
             *dst |= src;
         }
@@ -200,8 +342,7 @@ impl<const S: usize> Recognizer<S> {
     pub fn new(grammar: &Grammar<S>) -> Self {
         let mut result = Self {
             tables: Tables::new(grammar),
-            earley_chart: vec![],
-            next_set: EarleySet::new(),
+            earley_chart: EarleyChart::new(),
             forest: Forest::new(grammar),
             // complete: BinaryHeap::new_by_key(Box::new(|completed_item| (completed_item.origin, completed_item.dot))),
             complete: BinaryHeap::with_capacity(64),
@@ -211,21 +352,14 @@ impl<const S: usize> Recognizer<S> {
         result
     }
 
+
     fn initialize(&mut self) {
-        // self.earley_chart.push(EarleySet {
-        //     predicted: self.tables.prediction_matrix[self.tables.start_symbol.usize()].clone(),
-        //     medial: vec![],
-        // });
-        let es = EarleySet {
-            predicted: self.tables.prediction_matrix[self.tables.start_symbol.usize()],
-            medial: vec![],
-        };
-        // self.earley_chart.push(mem::replace(&mut self.next_set, EarleySet::new(self.tables.num_syms)));
-        self.earley_chart.push(es);
+        self.earley_chart.next_set(Some(self.tables.prediction_matrix[self.tables.start_symbol.usize()]));
+        self.earley_chart.next_set(None);
     }
 
     pub fn scan(&mut self, terminal: Symbol, values: u32) {
-        let earleme = self.earley_chart.len() - 1;
+        let earleme = self.earley_chart.len() - 2;
         let node = self.forest.leaf(terminal, earleme + 1, values);
         self.complete(earleme, terminal, node);
     }
@@ -240,15 +374,18 @@ impl<const S: usize> Recognizer<S> {
             // Do the rest.
             self.sort_medial_items();
             self.prediction_pass();
-            self.earley_chart
-                .push(mem::replace(&mut self.next_set, EarleySet::new()));
+            #[cfg(not(feature = "vec2d"))]
+            self.earley_chart.sets
+                .push(EarleySet::new());
+            #[cfg(feature = "vec2d")]
+            self.earley_chart.next_set(None);
             true
         }
     }
 
     #[cfg_attr(feature = "extra_inline", inline)]
     fn is_exhausted(&self) -> bool {
-        self.next_set.medial.len() == 0 && self.complete.is_empty()
+        self.earley_chart.next_medial().len() == 0 && self.complete.is_empty()
     }
 
     fn complete_all_sums_entirely(&mut self) {
@@ -274,25 +411,25 @@ impl<const S: usize> Recognizer<S> {
     fn sort_medial_items(&mut self) {
         // Build index by postdot
         // These medial positions themselves are sorted by postdot symbol.
-        self.next_set.medial.sort_unstable();
+        self.earley_chart.last_mut().items.sort_unstable();
     }
 
     #[cfg_attr(feature = "extra_inline", inline)]
     fn prediction_pass(&mut self) {
         // Iterate through medial items in the current set.
-        let iter = self.next_set.medial.iter();
+        let mut last = self.earley_chart.last_mut();
+        let iter = last.items.iter();
         // For each medial item in the current set, predict its postdot symbol.
-        let destination = &mut self.next_set.predicted;
         for ei in iter {
             if let Some(postdot) = self
                 .tables
                 .get_rhs1(ei.dot)
-                .filter(|postdot| !destination[postdot.usize()])
+                .filter(|postdot| !last.predicted[postdot.usize()])
             {
                 // Prediction happens here. We would prefer to call `self.predict`, but we can't,
                 // because `self.medial` is borrowed by `iter`.
-                let source = &self.tables.prediction_matrix[postdot.usize()];
-                destination.union_with(source);
+                let source = &self.tables.prediction_matrix[postdot.usize()][..];
+                last.predicted.union_with(source);
             }
         }
     }
@@ -300,7 +437,7 @@ impl<const S: usize> Recognizer<S> {
     fn complete(&mut self, earleme: usize, symbol: Symbol, node: NodeHandle) {
         if symbol.usize() >= S {
             self.complete_binary_predictions(earleme, symbol, node);
-        } else if self.earley_chart[earleme].predicted[symbol.usize()] {
+        } else if self.earley_chart.predicted(earleme)[symbol.usize()] {
             self.complete_medial_items(earleme, symbol, node);
             self.complete_predictions(earleme, symbol, node);
         }
@@ -311,7 +448,6 @@ impl<const S: usize> Recognizer<S> {
         let inner_start = {
             // we use binary search to narrow down the range of items.
             let set_idx = self.earley_chart[earleme]
-                .medial
                 .binary_search_by(|ei| (self.tables.get_rhs1(ei.dot), 1).cmp(&(Some(symbol), 0)));
             match set_idx {
                 Ok(idx) | Err(idx) => idx,
@@ -319,7 +455,7 @@ impl<const S: usize> Recognizer<S> {
         };
 
         let rhs1_eq = |ei: &&Item| self.tables.get_rhs1(ei.dot) == Some(symbol);
-        for item in self.earley_chart[earleme].medial[inner_start..]
+        for item in self.earley_chart[earleme][inner_start..]
             .iter()
             .take_while(rhs1_eq)
         {
@@ -336,7 +472,7 @@ impl<const S: usize> Recognizer<S> {
     fn complete_predictions(&mut self, earleme: usize, symbol: Symbol, node: NodeHandle) {
         // println!("{:?}", slice);
         for trans in &self.tables.completions[symbol.usize()] {
-            if self.earley_chart[earleme].predicted[trans.top.usize()] {
+            if self.earley_chart.predicted(earleme)[trans.top.usize()] {
                 if trans.is_unary {
                     self.complete.push(CompletedItem {
                         origin: earleme,
@@ -345,7 +481,7 @@ impl<const S: usize> Recognizer<S> {
                         right_node: None,
                     });
                 } else {
-                    self.next_set.medial.push(Item {
+                    self.earley_chart.medial().push(Item {
                         origin: earleme,
                         dot: trans.dot,
                         node: node,
@@ -361,8 +497,8 @@ impl<const S: usize> Recognizer<S> {
     fn complete_binary_predictions(&mut self, earleme: usize, symbol: Symbol, node: NodeHandle) {
         // println!("{:?}", slice);
         let trans = self.tables.gen_completions[symbol.usize() - S];
-        if self.earley_chart[earleme].predicted[trans.top.usize()] {
-            self.next_set.medial.push(Item {
+        if self.earley_chart.predicted(earleme)[trans.top.usize()] {
+            self.earley_chart.medial().push(Item {
                 origin: earleme,
                 dot: trans.dot,
                 node: node,
@@ -376,12 +512,13 @@ impl<const S: usize> Recognizer<S> {
     fn complete_binary_predictions(&mut self, earleme: usize, symbol: Symbol, node: NodeHandle) {
         // println!("{:?}", slice);
         for trans in &self.tables.completions[symbol.usize()] {
-            if self.earley_chart[earleme].predicted[trans.top.usize()] {
-                self.next_set.medial.push(Item {
+            if self.earley_chart.predicted(earleme)[trans.top.usize()] {
+                let postdot = self.tables.get_rhs1(trans.dot).unwrap();
+                self.earley_chart.medial().push(Item {
                     origin: earleme,
                     dot: trans.dot,
                     node: node,
-                    postdot: self.tables.get_rhs1(trans.dot).unwrap(),
+                    postdot,
                 });
             }
         }
@@ -389,7 +526,7 @@ impl<const S: usize> Recognizer<S> {
 
     #[cfg(feature = "debug")]
     fn log_last_earley_set(&self) {
-        let dots = self.dots_for_log(self.earley_chart.last().unwrap());
+        let dots = self.dots_for_log(self.earley_chart.last());
         for (rule_id, dots) in dots {
             print!(
                 "{} ::= ",
@@ -416,8 +553,8 @@ impl<const S: usize> Recognizer<S> {
     #[cfg(feature = "debug")]
     fn log_earley_set_diff(&self) {
         use std::collections::{BTreeMap, BTreeSet};
-        let dots_last_by_id = self.dots_for_log(self.earley_chart.last().unwrap());
-        let mut dots_next_by_id = self.dots_for_log(&self.next_set);
+        let dots_last_by_id = self.dots_for_log(self.earley_chart.next_to_last());
+        let mut dots_next_by_id = self.dots_for_log(self.earley_chart.last());
         let mut rule_ids: BTreeSet<usize> = BTreeSet::new();
         rule_ids.extend(dots_last_by_id.keys());
         rule_ids.extend(dots_next_by_id.keys());
@@ -491,7 +628,7 @@ impl<const S: usize> Recognizer<S> {
     }
 
     #[cfg(feature = "debug")]
-    fn dots_for_log(&self, es: &EarleySet<S>) -> BTreeMap<usize, BTreeMap<usize, BTreeSet<usize>>> {
+    fn dots_for_log(&self, es: EarleySetRef) -> BTreeMap<usize, BTreeMap<usize, BTreeSet<usize>>> {
         let mut dots = BTreeMap::new();
         for (i, rule) in self.tables.rules.iter().enumerate() {
             if es.predicted[self.tables.get_top_lhs(i).usize()] {
@@ -502,7 +639,7 @@ impl<const S: usize> Recognizer<S> {
                     .insert(self.earley_chart.len() - 1);
             }
         }
-        for item in &es.medial {
+        for item in es.items {
             dots.entry(item.dot)
                 .or_insert(BTreeMap::new())
                 .entry(1)
@@ -640,80 +777,6 @@ impl<const S: usize> Tables<S> {
     }
 }
 
-impl Forest {
-    fn new<const S: usize>(grammar: &Grammar<S>) -> Self {
-        Self {
-            graph: vec![],
-            eval: grammar.rules.iter().map(|rule| rule.id).collect(),
-        }
-    }
-
-    fn leaf(&mut self, terminal: Symbol, _x: usize, values: u32) -> NodeHandle {
-        let handle = NodeHandle(self.graph.len());
-        self.graph.push(Node::Leaf { terminal, values });
-        handle
-    }
-
-    fn push_summand(&mut self, item: CompletedItem) -> NodeHandle {
-        let handle = NodeHandle(self.graph.len());
-        let eval = self.eval[item.dot].map(|id| id as u32);
-        self.graph.push(Node::Product {
-            action: eval.unwrap_or(NULL_ACTION),
-            left_factor: item.left_node,
-            right_factor: item.right_node,
-        });
-        handle
-    }
-}
-
-pub struct Evaluator<F, G> {
-    eval_product: F,
-    eval_leaf: G,
-}
-
-struct Rec<T>(T, Option<Box<Rec<T>>>);
-
-impl<T, F, G> Evaluator<F, G>
-where
-    F: Fn(u32, &[T]) -> T + Copy,
-    G: Fn(Symbol, u32) -> T + Copy,
-    T: Clone + ::std::fmt::Debug,
-{
-    pub fn new(eval_product: F, eval_leaf: G) -> Self {
-        Self {
-            eval_product,
-            eval_leaf,
-        }
-    }
-
-    pub fn evaluate(&mut self, forest: &mut Forest, finished_node: NodeHandle) -> T {
-        self.evaluate_rec(forest, finished_node)[0].clone()
-    }
-
-    fn evaluate_rec(&mut self, forest: &mut Forest, handle: NodeHandle) -> Vec<T> {
-        match forest.graph[handle.0] {
-            Node::Product {
-                left_factor,
-                right_factor,
-                action,
-            } => {
-                let mut result = self.evaluate_rec(forest, left_factor);
-                if let Some(factor) = right_factor {
-                    result.extend(self.evaluate_rec(forest, factor));
-                }
-                if action != NULL_ACTION {
-                    vec![(self.eval_product)(action as u32, &result)]
-                } else {
-                    result
-                }
-            }
-            Node::Leaf { terminal, values } => {
-                vec![(self.eval_leaf)(terminal, values)]
-            }
-        }
-    }
-}
-
 #[derive(Clone, Debug)]
 pub enum Value {
     Digits(String),
@@ -786,14 +849,51 @@ impl CalcRecognizer {
             };
             self.recognizer.scan(terminal, ch as u32);
             let success = self.recognizer.end_earleme();
-            // if !success {
-            //     self.recognizer.log_earley_set_diff();
-            // }
+            if !success {
+                self.recognizer.log_earley_set_diff();
+            }
             assert!(success, "parse failed at character {}", i);
         }
         let finished_node = self.recognizer.finished_node.expect("parse failed");
         let mut evaluator = Evaluator::new(
-            |rule_id, args: &[Value]| match (
+            #[cfg(all(not(feature = "simple_forest"), not(feature = "compact_forest"), not(feature = "linked_forest")))]
+            |rule_id, result: &[Value], args: &[usize]| {
+                // println!("{:?}", (rule_id, result, args));
+            match (
+                rule_id,
+                args.get(0).cloned().and_then(|a| result.get(a)).cloned().unwrap_or(Value::None),
+                args.get(1).cloned().and_then(|a| result.get(a)).cloned().unwrap_or(Value::None),
+                args.get(2).cloned().and_then(|a| result.get(a)).cloned().unwrap_or(Value::None),
+            ) {
+                (0, Value::Float(left), _, Value::Float(right)) => Value::Float(left + right),
+                (1, Value::Float(left), _, Value::Float(right)) => Value::Float(left - right),
+                (2, val, Value::None, Value::None) => val,
+                (3, Value::Float(left), _, Value::Float(right)) => Value::Float(left * right),
+                (4, Value::Float(left), _, Value::Float(right)) => Value::Float(left / right),
+                (5, val, Value::None, Value::None) => val,
+                (6, _, val, _) => val,
+                (7, _, Value::Float(num), Value::None) => Value::Float(-num),
+                (8, Value::Digits(digits), Value::None, Value::None) => {
+                    Value::Float(digits.parse::<f64>().unwrap())
+                }
+                (9, val @ Value::Digits(..), _, _) => val,
+                (10, Value::Digits(before_dot), _, Value::Digits(after_dot)) => {
+                    let mut digits = before_dot;
+                    digits.push('.');
+                    digits.push_str(&after_dot[..]);
+                    Value::Digits(digits)
+                }
+                (11, Value::Digits(mut num), Value::Digits(digit), _) => {
+                    num.push_str(&digit[..]);
+                    Value::Digits(num)
+                }
+                (12, val @ Value::Digits(..), _, _) => val,
+                args => panic!("unknown rule id {:?} or args {:?}", rule_id, args),
+            }},
+            #[cfg(feature = "simple_forest")]
+            |rule_id, args: &[Value]| {
+                // println!("{:?}", (rule_id, result, args));
+            match (
                 rule_id,
                 args.get(0).cloned().unwrap_or(Value::None),
                 args.get(1).cloned().unwrap_or(Value::None),
@@ -822,8 +922,42 @@ impl CalcRecognizer {
                     Value::Digits(num)
                 }
                 (12, val @ Value::Digits(..), _, _) => val,
-                other => panic!("unknown rule id {:?} or args {:?}", rule_id, args),
-            },
+                args => panic!("unknown rule id {:?} or args {:?}", rule_id, args),
+            }},
+            #[cfg(feature = "linked_forest")]
+            |rule_id, args: &mut ::std::collections::LinkedList<Value>| {
+                // println!("{:?}", (rule_id, result, args));
+            match (
+                rule_id,
+                args.pop_front().unwrap_or(Value::None),
+                args.pop_front().unwrap_or(Value::None),
+                args.pop_front().unwrap_or(Value::None),
+            ) {
+                (0, Value::Float(left), _, Value::Float(right)) => Value::Float(left + right),
+                (1, Value::Float(left), _, Value::Float(right)) => Value::Float(left - right),
+                (2, val, Value::None, Value::None) => val,
+                (3, Value::Float(left), _, Value::Float(right)) => Value::Float(left * right),
+                (4, Value::Float(left), _, Value::Float(right)) => Value::Float(left / right),
+                (5, val, Value::None, Value::None) => val,
+                (6, _, val, _) => val,
+                (7, _, Value::Float(num), Value::None) => Value::Float(-num),
+                (8, Value::Digits(digits), Value::None, Value::None) => {
+                    Value::Float(digits.parse::<f64>().unwrap())
+                }
+                (9, val @ Value::Digits(..), _, _) => val,
+                (10, Value::Digits(before_dot), _, Value::Digits(after_dot)) => {
+                    let mut digits = before_dot;
+                    digits.push('.');
+                    digits.push_str(&after_dot[..]);
+                    Value::Digits(digits)
+                }
+                (11, Value::Digits(mut num), Value::Digits(digit), _) => {
+                    num.push_str(&digit[..]);
+                    Value::Digits(num)
+                }
+                (12, val @ Value::Digits(..), _, _) => val,
+                args => panic!("unknown rule id {:?} or args {:?}", rule_id, args),
+            }},
             |terminal, values| {
                 if terminal == digit {
                     Value::Digits((values as u8 as char).to_string())
