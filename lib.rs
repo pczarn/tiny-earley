@@ -3,15 +3,16 @@
 
 extern crate test;
 
-#[cfg_attr(all(not(feature = "simple_forest"), not(feature = "compact_forest"), not(feature = "linked_forest")), path = "simplest_forest.rs")]
+#[cfg_attr(all(not(feature = "simple_forest"), not(feature = "compact_forest"), not(feature = "linked_forest"), not(feature = "rel_compact_forest")), path = "simplest_forest.rs")]
 #[cfg_attr(feature = "simple_forest", path = "simple_forest.rs")]
 #[cfg_attr(feature = "compact_forest", path = "compact_forest.rs")]
 #[cfg_attr(feature = "linked_forest", path = "linked_forest.rs")]
+#[cfg_attr(feature = "rel_compact_forest", path = "rel_compact_forest.rs")]
 mod forest;
 
 use test::Bencher;
 
-use std::{collections::BinaryHeap, env::Args, ops::Index};
+use std::{collections::BinaryHeap, ops::Index};
 #[cfg(feature = "debug")]
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -829,10 +830,68 @@ pub fn calc_recognizer() -> CalcRecognizer {
     }
 }
 
+#[cfg(any(feature = "linked_forest", feature = "compact_forest", feature = "rel_compact_forest"))]
+struct E {
+    symbols: [Symbol; 13],
+}
+
+#[cfg(any(feature = "linked_forest", feature = "compact_forest", feature = "rel_compact_forest"))]
+impl self::forest::Eval for E {
+    type Elem = Value;
+
+    fn leaf(&mut self, terminal: Symbol, values: u32) -> Self::Elem {
+        let [sum, factor, op_mul, op_div, lparen, rparen, _expr_sym, op_minus, op_plus, _number, _whole, digit, dot] =
+            self.symbols;
+        if terminal == digit {
+            Value::Digits((values as u8 as char).to_string())
+        } else {
+            Value::None
+        }
+    }
+
+    fn product(&mut self, action: u32, args: &mut std::collections::LinkedList<Self::Elem>) -> Self::Elem {
+        let [sum, factor, op_mul, op_div, lparen, rparen, _expr_sym, op_minus, op_plus, _number, _whole, digit, dot] =
+            self.symbols;
+        match (
+            action,
+            args.pop_front().unwrap_or(Value::None),
+            args.pop_front().unwrap_or(Value::None),
+            args.pop_front().unwrap_or(Value::None),
+        ) {
+            (0, Value::Float(left), _, Value::Float(right)) => Value::Float(left + right),
+            (1, Value::Float(left), _, Value::Float(right)) => Value::Float(left - right),
+            (2, val, Value::None, Value::None) => val,
+            (3, Value::Float(left), _, Value::Float(right)) => Value::Float(left * right),
+            (4, Value::Float(left), _, Value::Float(right)) => Value::Float(left / right),
+            (5, val, Value::None, Value::None) => val,
+            (6, _, val, _) => val,
+            (7, _, Value::Float(num), Value::None) => Value::Float(-num),
+            (8, Value::Digits(digits), Value::None, Value::None) => {
+                Value::Float(digits.parse::<f64>().unwrap())
+            }
+            (9, val @ Value::Digits(..), _, _) => val,
+            (10, Value::Digits(before_dot), _, Value::Digits(after_dot)) => {
+                let mut digits = before_dot;
+                digits.push('.');
+                digits.push_str(&after_dot[..]);
+                Value::Digits(digits)
+            }
+            (11, Value::Digits(mut num), Value::Digits(digit), _) => {
+                num.push_str(&digit[..]);
+                Value::Digits(num)
+            }
+            (12, val @ Value::Digits(..), _, _) => val,
+            args => panic!("unknown rule id {:?} or args {:?}", action, args),
+        }
+    }
+}
+
 impl CalcRecognizer {
     pub fn parse(&mut self, expr: &str) -> f64 {
         let [sum, factor, op_mul, op_div, lparen, rparen, _expr_sym, op_minus, op_plus, _number, _whole, digit, dot] =
             self.grammar.symbols();
+
+        let symbols = self.grammar.symbols();
 
         for (i, ch) in expr.chars().enumerate() {
             let terminal = match ch {
@@ -849,12 +908,16 @@ impl CalcRecognizer {
             };
             self.recognizer.scan(terminal, ch as u32);
             let success = self.recognizer.end_earleme();
+            #[cfg(feature = "debug")]
             if !success {
                 self.recognizer.log_earley_set_diff();
             }
             assert!(success, "parse failed at character {}", i);
         }
         let finished_node = self.recognizer.finished_node.expect("parse failed");
+        #[cfg(any(feature = "compact_forest", feature = "linked_forest", feature = "rel_compact_forest"))]
+        let result = self.recognizer.forest.evaluator(E { symbols }).evaluate(finished_node);
+        #[cfg(feature = "simple_forest")]
         let mut evaluator = Evaluator::new(
             #[cfg(all(not(feature = "simple_forest"), not(feature = "compact_forest"), not(feature = "linked_forest")))]
             |rule_id, result: &[Value], args: &[usize]| {
@@ -924,48 +987,18 @@ impl CalcRecognizer {
                 (12, val @ Value::Digits(..), _, _) => val,
                 args => panic!("unknown rule id {:?} or args {:?}", rule_id, args),
             }},
-            #[cfg(feature = "linked_forest")]
-            |rule_id, args: &mut ::std::collections::LinkedList<Value>| {
-                // println!("{:?}", (rule_id, result, args));
-            match (
-                rule_id,
-                args.pop_front().unwrap_or(Value::None),
-                args.pop_front().unwrap_or(Value::None),
-                args.pop_front().unwrap_or(Value::None),
-            ) {
-                (0, Value::Float(left), _, Value::Float(right)) => Value::Float(left + right),
-                (1, Value::Float(left), _, Value::Float(right)) => Value::Float(left - right),
-                (2, val, Value::None, Value::None) => val,
-                (3, Value::Float(left), _, Value::Float(right)) => Value::Float(left * right),
-                (4, Value::Float(left), _, Value::Float(right)) => Value::Float(left / right),
-                (5, val, Value::None, Value::None) => val,
-                (6, _, val, _) => val,
-                (7, _, Value::Float(num), Value::None) => Value::Float(-num),
-                (8, Value::Digits(digits), Value::None, Value::None) => {
-                    Value::Float(digits.parse::<f64>().unwrap())
-                }
-                (9, val @ Value::Digits(..), _, _) => val,
-                (10, Value::Digits(before_dot), _, Value::Digits(after_dot)) => {
-                    let mut digits = before_dot;
-                    digits.push('.');
-                    digits.push_str(&after_dot[..]);
-                    Value::Digits(digits)
-                }
-                (11, Value::Digits(mut num), Value::Digits(digit), _) => {
-                    num.push_str(&digit[..]);
-                    Value::Digits(num)
-                }
-                (12, val @ Value::Digits(..), _, _) => val,
-                args => panic!("unknown rule id {:?} or args {:?}", rule_id, args),
-            }},
+            #[cfg(feature = "simple_forest")]
             |terminal, values| {
                 if terminal == digit {
                     Value::Digits((values as u8 as char).to_string())
                 } else {
                     Value::None
                 }
-            },
+            }
         );
+        #[cfg(feature = "forest_size")]
+        panic!("{}", self.recognizer.forest.memory_use());
+        #[cfg(feature = "simple_forest")]
         let result = evaluator.evaluate(&mut self.recognizer.forest, finished_node);
         if let Value::Float(num) = result {
             num

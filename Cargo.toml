@@ -11,8 +11,11 @@ path = "bench_parser.rs"
 
 [dependencies]
 
+[profile.bench]
+opt-level = 3               # Use slightly better optimizations.
+
 [features]
-default = ["debug", "simplest_forest"]
+default = ["debug", "rel_compact_forest"]
 debug = []
 simple = []
 extra_inline = []
@@ -21,3 +24,5 @@ simplest_forest = []
 simple_forest = []
 compact_forest = []
 linked_forest = []
+forest_size = []
+rel_compact_forest =  []

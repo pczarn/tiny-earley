@@ -29,6 +29,10 @@ enum Node {
 const NULL_ACTION: u32 = !0;
 
 impl Forest {
+    pub fn memory_use(&self) -> usize {
+        self.graph.len() * std::mem::size_of::<Node>()        
+    }
+
     pub fn new<const S: usize>(grammar: &Grammar<S>) -> Self {
         Self {
             graph: vec![],
@@ -52,46 +56,45 @@ impl Forest {
         });
         handle
     }
-}
 
-pub struct Evaluator<F, G> {
-    eval_product: F,
-    eval_leaf: G,
-}
-
-struct Rec<T>(T, Option<Box<Rec<T>>>);
-
-impl<T, F, G> Evaluator<F, G>
-where
-    F: Fn(u32, &mut LinkedList<T>) -> T + Copy,
-    G: Fn(Symbol, u32) -> T + Copy,
-    T: Clone + ::std::fmt::Debug,
-{
-    pub fn new(eval_product: F, eval_leaf: G) -> Self {
-        Self {
-            eval_product,
-            eval_leaf,
+    pub fn evaluator<T: Eval>(&mut self, eval: T) -> Evaluator<T> {
+        Evaluator {
+            forest: self,
+            eval,
         }
     }
+}
 
-    pub fn evaluate(&mut self, forest: &mut Forest, finished_node: NodeHandle) -> T {
-        self.evaluate_rec(forest, finished_node).into_iter().next().unwrap()
+pub trait Eval {
+    type Elem;
+    fn leaf(&mut self, terminal: Symbol, values: u32) -> Self::Elem;
+    fn product(&mut self, action: u32, list: &mut LinkedList<Self::Elem>) -> Self::Elem;
+}
+
+pub struct Evaluator<'a, T> {
+    eval: T,
+    forest: &'a mut Forest,
+}
+
+impl<'a, T: Eval> Evaluator<'a, T> {
+    pub fn evaluate(&mut self, finished_node: NodeHandle) -> T::Elem {
+        self.evaluate_rec(finished_node).into_iter().next().unwrap()
     }
 
-    fn evaluate_rec(&mut self, forest: &mut Forest, handle: NodeHandle) -> LinkedList<T> {
-        match forest.graph[handle.0] {
+    fn evaluate_rec(&mut self, handle: NodeHandle) -> LinkedList<T::Elem> {
+        match self.forest.graph[handle.0] {
             Node::Product {
                 left_factor,
                 right_factor,
                 action,
             } => {
-                let mut evald = self.evaluate_rec(forest, left_factor);
+                let mut evald = self.evaluate_rec(left_factor);
                 if let Some(factor) = right_factor {
-                    evald.append(&mut self.evaluate_rec(forest, factor));
+                    evald.append(&mut self.evaluate_rec(factor));
                 }
                 if action != NULL_ACTION {
                     let mut list = LinkedList::new();
-                    list.push_back((self.eval_product)(action as u32, &mut evald));
+                    list.push_back(self.eval.product(action as u32, &mut evald));
                     list
                 } else {
                     evald
@@ -99,7 +102,7 @@ where
             }
             Node::Leaf { terminal, values } => {
                 let mut list = LinkedList::new();
-                list.push_back((self.eval_leaf)(terminal, values));
+                list.push_back(self.eval.leaf(terminal, values));
                 list
             }
         }
