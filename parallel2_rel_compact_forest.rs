@@ -5,6 +5,21 @@ use std::{collections::LinkedList, iter};
 use super::*;
 
 #[derive(Clone)]
+struct Vec2d<T> {
+    indices: Vec<usize>,
+    items: Vec<T>,
+}
+
+impl<T> Vec2d<T> {
+    fn new() -> Self {
+        Self {
+            indices: vec![],
+            items: vec![],
+        }
+    }
+}
+
+#[derive(Clone)]
 pub struct Forest {
     graph: Vec<u8>,
     eval: Vec<Option<usize>>,
@@ -35,8 +50,6 @@ enum Node {
 static NODE_SIZES: &'static [(u8, u8, u8, bool)] = &[
     (8, 8, 0, false),
     (16, 16, 0, false),
-    (32, 32, 0, false),
-    (32, 64, 0, false),
     (8, 8, 0, true),
     (8, 8, 8, true),
     (8, 16, 8, true),
@@ -153,7 +166,7 @@ impl Forest {
 }
 
 pub trait Eval {
-    type Elem;
+    type Elem: Send;
     fn leaf(&self, terminal: Symbol, values: u32) -> Self::Elem;
     fn product(&self, action: u32, list: &mut LinkedList<Self::Elem>) -> Self::Elem;
 }
@@ -163,35 +176,38 @@ pub struct Evaluator<'a, T> {
     forest: &'a mut Forest,
 }
 
-impl<'a, T: Eval> Evaluator<'a, T> {
+impl<'a, T: Eval + Send + Sync> Evaluator<'a, T> {
     pub fn evaluate(&mut self, finished_node: NodeHandle) -> T::Elem {
-        self.evaluate_rec(finished_node).into_iter().next().unwrap()
-    }
-
-    fn evaluate_rec(&mut self, handle: NodeHandle) -> LinkedList<T::Elem> {
-        match self.forest.get(handle) {
-            Node::Product {
-                left_factor,
-                right_factor,
-                action,
-            } => {
-                let mut evald = self.evaluate_rec(left_factor);
-                if let Some(factor) = right_factor {
-                    evald.append(&mut self.evaluate_rec(factor));
-                }
-                if action != NULL_ACTION {
-                    let mut list = LinkedList::new();
-                    list.push_back(self.eval.product(action as u32, &mut evald));
-                    list
-                } else {
-                    evald
+        let mut vec2d: Vec2d<Node> = Vec2d::new();
+        vec2d.push(self.forest.get(finished_node));
+        while !vec2d.last().is_empty() {
+            for node in vec2d.last() {
+                match node {
+                    Node::Product { left_factor, right_factor, action } => {
+                        vec2d.push(self.forest.get(left_factor));
+                        if let Some(factor) = right_factor {
+                            vec2d.push(self.forest.get(factor));
+                        }
+                    }
+                    Node::Leaf { .. } => {}
                 }
             }
-            Node::Leaf { terminal, values } => {
-                let mut list = LinkedList::new();
-                list.push_back(self.eval.leaf(terminal, values));
-                list
-            }
+        }
+        for i in (0 .. vec2d.row_count()).rev() {
+            vec2d[i].iter_par().map(|node|
+                match node {
+                    Node::Product { left_factor, right_factor, action } => {
+                        let mut list = LinkedList::new();
+                        list.push_back(self.eval.product(action as u32, &mut evald));
+                        list
+                    }
+                    Node::Leaf { terminal, values } => {
+                        let mut list = LinkedList::new();
+                        list.push_back(self.eval.leaf(terminal, values));
+                        list
+                    }
+                }
+            )
         }
     }
 }

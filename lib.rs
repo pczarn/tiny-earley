@@ -3,12 +3,14 @@
 
 extern crate test;
 
-#[cfg_attr(all(not(feature = "simple_forest"), not(feature = "compact_forest"), not(feature = "linked_forest"), not(feature = "rel_compact_forest")), path = "simplest_forest.rs")]
+#[cfg_attr(not(feature = "not_simplest_forest"), path = "simplest_forest.rs")]
 #[cfg_attr(feature = "simple_forest", path = "simple_forest.rs")]
 #[cfg_attr(feature = "compact_forest", path = "compact_forest.rs")]
 #[cfg_attr(feature = "linked_forest", path = "linked_forest.rs")]
 #[cfg_attr(feature = "rel_compact_forest", path = "rel_compact_forest.rs")]
-mod forest;
+#[cfg_attr(feature = "parallel_rel_compact_forest", path = "parallel_rel_compact_forest.rs")]
+#[cfg_attr(feature = "depth_rel_compact_forest", path = "depth_rel_compact_forest.rs")]
+mod parallel2_rel_compact_forest;
 
 use test::Bencher;
 
@@ -16,7 +18,7 @@ use std::{collections::BinaryHeap, ops::Index};
 #[cfg(feature = "debug")]
 use std::collections::{BTreeMap, BTreeSet};
 
-use self::forest::*;
+use self::parallel2_rel_compact_forest::*;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd)]
 pub struct Symbol(u32);
@@ -27,6 +29,24 @@ pub struct Grammar<const S: usize> {
     start_symbol: Symbol,
     symbol_names: [&'static str; S],
     gen_symbols: u32,
+    rule_id: usize,
+    lhs: Symbol,
+    nulling: BTreeMap<Symbol, usize>,
+    rhs_nulling: Vec<NullingEliminated>,
+}
+
+#[derive(Clone)]
+enum Side {
+    Left,
+    Right,
+    Both,
+}
+
+#[derive(Clone)]
+struct NullingEliminated {
+    rule_id: Option<usize>,
+    sym: Symbol,
+    side: Side,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -68,7 +88,7 @@ pub struct Recognizer<const S: usize> {
     pub finished_node: Option<NodeHandle>,
 }
 
-#[cfg(feature = "vec2d")]
+#[cfg(any(feature = "vec2d", feature = "parallel_rel_compact_forest"))]
 #[derive(Clone)]
 struct EarleyChart<const S: usize> {
     predicted: Vec<[bool; S]>,
@@ -76,13 +96,13 @@ struct EarleyChart<const S: usize> {
     items: Vec<Item>,
 }
 
-#[cfg(not(feature = "vec2d"))]
+#[cfg(not(any(feature = "vec2d", feature = "parallel_rel_compact_forest")))]
 #[derive(Clone)]
 struct EarleyChart<const S: usize> {
     sets: Vec<EarleySet<S>>,
 }
 
-#[cfg(feature = "vec2d")]
+#[cfg(any(feature = "vec2d", feature = "parallel_rel_compact_forest"))]
 impl<const S: usize> EarleyChart<S> {
     fn next_set(&mut self, predicted: Option<[bool; S]>) {
         self.predicted.push(predicted.unwrap_or([false; S]));
@@ -139,7 +159,8 @@ impl<const S: usize> EarleyChart<S> {
     }
 }
 
-#[cfg(not(feature = "vec2d"))]
+
+#[cfg(not(any(feature = "vec2d", feature = "parallel_rel_compact_forest")))]
 impl<const S: usize> EarleyChart<S> {
     fn next_set(&mut self, predicted: Option<[bool; S]>) {
         self.sets.push(EarleySet { predicted: predicted.unwrap_or([false; S]), medial: vec![] });
@@ -206,7 +227,7 @@ struct EarleySetRef<'a> {
     predicted: &'a [bool],
 }
 
-#[cfg(feature = "vec2d")]
+#[cfg(any(feature = "vec2d", feature = "parallel_rel_compact_forest"))]
 impl<const S: usize> Index<usize> for EarleyChart<S> {
     type Output = [Item];
     fn index(&self, index: usize) -> &Self::Output {
@@ -214,7 +235,7 @@ impl<const S: usize> Index<usize> for EarleyChart<S> {
     }
 }
 
-#[cfg(not(feature = "vec2d"))]
+#[cfg(not(any(feature = "vec2d", feature = "parallel_rel_compact_forest")))]
 impl<const S: usize> Index<usize> for EarleyChart<S> {
     type Output = [Item];
     fn index(&self, index: usize) -> &Self::Output {
@@ -286,6 +307,10 @@ impl<const S: usize> Grammar<S> {
             start_symbol: Symbol(start_symbol as u32),
             symbol_names,
             gen_symbols: 0,
+            rule_id: 0,
+            lhs: Symbol(0),
+            nulling: BTreeMap::new(),
+            rhs_nulling: vec![],
         }
     }
 
@@ -297,7 +322,13 @@ impl<const S: usize> Grammar<S> {
         result
     }
 
-    pub fn rule<const N: usize>(&mut self, lhs: Symbol, rhs: [Symbol; N], id: usize) {
+    pub fn rule<const N: usize>(&mut self, lhs: Symbol, rhs: [Symbol; N]) -> &mut Self {
+        if rhs.len() == 0 {
+            self.nulling.insert(lhs, self.rule_id);
+            self.rule_id += 1;
+            self.lhs = lhs;
+            return self;
+        }
         let mut cur_rhs0 = rhs[0];
         for i in 1..N - 1 {
             let gensym = Symbol(self.gen_symbols + S as u32);
@@ -314,12 +345,54 @@ impl<const S: usize> Grammar<S> {
             lhs,
             rhs0: cur_rhs0,
             rhs1: if N == 1 { None } else { Some(rhs[N - 1]) },
-            id: Some(id),
+            id: Some(self.rule_id),
         });
+        self.rule_id += 1;
+        self.lhs = lhs;
+        self
+    }
+
+    fn rhs<const N: usize>(&mut self, rhs: [Symbol; N]) -> &mut Self {
+        self.rule(self.lhs, rhs);
+        self       
     }
 
     fn sort_rules(&mut self) {
         self.rules.sort_by(|a, b| a.lhs.cmp(&b.lhs));
+    }
+
+    fn eliminate_nulling(&mut self) {
+        let mut new_rules = vec![];
+        let mut rules = self.rules.clone();
+        let mut change = true;
+        while change {
+            change = false;
+            for rule in &self.rules {
+                if let Some(_id) = self.nulling.get(&rule.rhs0) {
+                    if let Some(rhs1) = rule.rhs1 {
+                        new_rules.push(Rule { lhs: rule.lhs, rhs0: rhs1, rhs1: None, id: rule.id });
+                        if let Some(_id) = self.nulling.get(&rhs1) {
+                            self.rhs_nulling.push(NullingEliminated { rule_id: rule.id, side: Side::Both, sym: rule.rhs0 });
+                            change |= self.nulling.insert(rule.lhs, rule.id.unwrap_or(0)).is_none();
+                        } else {
+                            self.rhs_nulling.push(NullingEliminated { rule_id: rule.id, side: Side::Left, sym: rule.rhs0 });
+                        }
+                    } else {
+                        // TODO rule.id
+                        self.rhs_nulling.push(NullingEliminated { rule_id: rule.id, side: Side::Left, sym: rule.rhs0 });
+                        change |= self.nulling.insert(rule.lhs, rule.id.unwrap_or(0)).is_none();
+                    }
+                }
+                if let Some(rhs1) = rule.rhs1 {
+                    if let Some(_id) = self.nulling.get(&rhs1) {
+                        self.rhs_nulling.push(NullingEliminated { rule_id: rule.id, side: Side::Right, sym: rhs1 });
+                        new_rules.push(Rule { lhs: rule.lhs, rhs0: rule.rhs0, rhs1: None, id: rule.id });
+                    }
+                }
+
+            }
+        }
+        self.rules.extend(new_rules);
     }
 }
 
@@ -375,10 +448,10 @@ impl<const S: usize> Recognizer<S> {
             // Do the rest.
             self.sort_medial_items();
             self.prediction_pass();
-            #[cfg(not(feature = "vec2d"))]
+            #[cfg(not(any(feature = "vec2d", feature = "parallel_rel_compact_forest")))]
             self.earley_chart.sets
                 .push(EarleySet::new());
-            #[cfg(feature = "vec2d")]
+            #[cfg(any(feature = "vec2d", feature = "parallel_rel_compact_forest"))]
             self.earley_chart.next_set(None);
             true
         }
@@ -499,12 +572,21 @@ impl<const S: usize> Recognizer<S> {
         // println!("{:?}", slice);
         let trans = self.tables.gen_completions[symbol.usize() - S];
         if self.earley_chart.predicted(earleme)[trans.top.usize()] {
-            self.earley_chart.medial().push(Item {
-                origin: earleme,
-                dot: trans.dot,
-                node: node,
-                postdot: self.tables.get_rhs1(trans.dot).unwrap(),
-            });
+            if let Some(postdot) = self.tables.get_rhs1(trans.dot) {
+                self.earley_chart.medial().push(Item {
+                    origin: earleme,
+                    dot: trans.dot,
+                    node: node,
+                    postdot,
+                });
+            } else {
+                self.complete.push(CompletedItem {
+                    origin: earleme,
+                    dot: trans.dot,
+                    left_node: node,
+                    right_node: None,
+                });
+            }
         }
     }
 
@@ -514,13 +596,21 @@ impl<const S: usize> Recognizer<S> {
         // println!("{:?}", slice);
         for trans in &self.tables.completions[symbol.usize()] {
             if self.earley_chart.predicted(earleme)[trans.top.usize()] {
-                let postdot = self.tables.get_rhs1(trans.dot).unwrap();
-                self.earley_chart.medial().push(Item {
-                    origin: earleme,
-                    dot: trans.dot,
-                    node: node,
-                    postdot,
-                });
+                if let Some(postdot) = self.tables.get_rhs1(trans.dot) {
+                    self.earley_chart.medial().push(Item {
+                        origin: earleme,
+                        dot: trans.dot,
+                        node: node,
+                        postdot,
+                    });
+                } else {
+                    self.complete.push(CompletedItem {
+                        origin: earleme,
+                        dot: trans.dot,
+                        left_node: node,
+                        right_node: None,
+                    });
+                }
             }
         }
     }
@@ -808,20 +898,20 @@ pub fn calc_recognizer() -> CalcRecognizer {
     // expr ::= '(' sum ')' | '-' expr | number
     // number ::= whole | whole '.' whole
     // whole ::= whole [0-9] | [0-9]
-    grammar.rule(sum, [sum, op_plus, factor], 0);
-    grammar.rule(sum, [sum, op_minus, factor], 1);
-    grammar.rule(sum, [factor], 2);
-    grammar.rule(factor, [factor, op_mul, expr_sym], 3);
-    grammar.rule(factor, [factor, op_div, expr_sym], 4);
-    grammar.rule(factor, [expr_sym], 5);
+    grammar.rule(sum, [sum, op_plus, factor]);
+    grammar.rule(sum, [sum, op_minus, factor]);
+    grammar.rule(sum, [factor]);
+    grammar.rule(factor, [factor, op_mul, expr_sym]);
+    grammar.rule(factor, [factor, op_div, expr_sym]);
+    grammar.rule(factor, [expr_sym]);
 
-    grammar.rule(expr_sym, [lparen, sum, rparen], 6);
-    grammar.rule(expr_sym, [op_minus, expr_sym], 7);
-    grammar.rule(expr_sym, [number], 8);
-    grammar.rule(number, [whole], 9);
-    grammar.rule(number, [whole, dot, whole], 10);
-    grammar.rule(whole, [whole, digit], 11);
-    grammar.rule(whole, [digit], 12);
+    grammar.rule(expr_sym, [lparen, sum, rparen]);
+    grammar.rule(expr_sym, [op_minus, expr_sym]);
+    grammar.rule(expr_sym, [number]);
+    grammar.rule(number, [whole]);
+    grammar.rule(number, [whole, dot, whole]);
+    grammar.rule(whole, [whole, digit]);
+    grammar.rule(whole, [digit]);
     grammar.sort_rules();
     let recognizer = Recognizer::new(&grammar);
     CalcRecognizer {
@@ -830,16 +920,16 @@ pub fn calc_recognizer() -> CalcRecognizer {
     }
 }
 
-#[cfg(any(feature = "linked_forest", feature = "compact_forest", feature = "rel_compact_forest"))]
+#[cfg(feature = "forest_eval")]
 struct E {
     symbols: [Symbol; 13],
 }
 
-#[cfg(any(feature = "linked_forest", feature = "compact_forest", feature = "rel_compact_forest"))]
-impl self::forest::Eval for E {
+#[cfg(feature = "forest_eval")]
+impl self::parallel2_rel_compact_forest::Eval for E {
     type Elem = Value;
 
-    fn leaf(&mut self, terminal: Symbol, values: u32) -> Self::Elem {
+    fn leaf(&self, terminal: Symbol, values: u32) -> Self::Elem {
         let [sum, factor, op_mul, op_div, lparen, rparen, _expr_sym, op_minus, op_plus, _number, _whole, digit, dot] =
             self.symbols;
         if terminal == digit {
@@ -849,7 +939,7 @@ impl self::forest::Eval for E {
         }
     }
 
-    fn product(&mut self, action: u32, args: &mut std::collections::LinkedList<Self::Elem>) -> Self::Elem {
+    fn product(&self, action: u32, args: &mut std::collections::LinkedList<Self::Elem>) -> Self::Elem {
         let [sum, factor, op_mul, op_div, lparen, rparen, _expr_sym, op_minus, op_plus, _number, _whole, digit, dot] =
             self.symbols;
         match (
@@ -915,7 +1005,7 @@ impl CalcRecognizer {
             assert!(success, "parse failed at character {}", i);
         }
         let finished_node = self.recognizer.finished_node.expect("parse failed");
-        #[cfg(any(feature = "compact_forest", feature = "linked_forest", feature = "rel_compact_forest"))]
+        #[cfg(feature = "forest_eval")]
         let result = self.recognizer.forest.evaluator(E { symbols }).evaluate(finished_node);
         #[cfg(feature = "simple_forest")]
         let mut evaluator = Evaluator::new(
@@ -1050,3 +1140,4 @@ fn bench_parser3(bench: &mut Bencher) {
     });
 }
 
+mod bench_c;

@@ -10,19 +10,27 @@ path = "lib.rs"
 path = "bench_parser.rs"
 
 [dependencies]
+rayon = { version = "1.10", optional = true }
+c_lexer_logos = "0.1"
+
+[dev-dependencies]
 
 [profile.bench]
 opt-level = 3               # Use slightly better optimizations.
 
 [features]
-default = ["debug", "rel_compact_forest"]
+default = ["debug", "depth_rel_compact_forest"]
 debug = []
 simple = []
 extra_inline = []
 vec2d = []
 simplest_forest = []
-simple_forest = []
-compact_forest = []
-linked_forest = []
+simple_forest = ["not_simplest_forest"]
+compact_forest = ["not_simplest_forest", "forest_eval"]
+linked_forest = ["not_simplest_forest", "forest_eval"]
 forest_size = []
-rel_compact_forest =  []
+rel_compact_forest =  ["not_simplest_forest", "forest_eval"]
+parallel_rel_compact_forest = ["not_simplest_forest", "dep:rayon", "forest_eval", "vec2d"]
+depth_rel_compact_forest = ["not_simplest_forest", "dep:rayon", "forest_eval", "vec2d"]
+not_simplest_forest = []
+forest_eval = []

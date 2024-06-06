@@ -153,7 +153,7 @@ impl Forest {
 }
 
 pub trait Eval {
-    type Elem;
+    type Elem: Send;
     fn leaf(&self, terminal: Symbol, values: u32) -> Self::Elem;
     fn product(&self, action: u32, list: &mut LinkedList<Self::Elem>) -> Self::Elem;
 }
@@ -163,22 +163,40 @@ pub struct Evaluator<'a, T> {
     forest: &'a mut Forest,
 }
 
-impl<'a, T: Eval> Evaluator<'a, T> {
+impl<'a, T: Eval + Send + Sync> Evaluator<'a, T> {
     pub fn evaluate(&mut self, finished_node: NodeHandle) -> T::Elem {
         self.evaluate_rec(finished_node).into_iter().next().unwrap()
     }
 
-    fn evaluate_rec(&mut self, handle: NodeHandle) -> LinkedList<T::Elem> {
+    fn evaluate_rec(&self, handle: NodeHandle) -> LinkedList<T::Elem> {
         match self.forest.get(handle) {
             Node::Product {
                 left_factor,
                 right_factor,
                 action,
             } => {
-                let mut evald = self.evaluate_rec(left_factor);
-                if let Some(factor) = right_factor {
-                    evald.append(&mut self.evaluate_rec(factor));
-                }
+                // add parallel
+                // let mut evald = self.evaluate_rec(left_factor);
+                let mut evald;
+                // if handle.get() < limit + 1 {
+                    // println!("non-parallel");
+                //     if let Some(factor) = right_factor {
+                //         let mut a = self.evaluate_rec(left_factor, limit);
+                //         a.append(&mut self.evaluate_rec(factor));
+                //         evald = a;
+                //     } else {
+                //         evald = self.evaluate_rec(left_factor);
+                //     }
+                // } else {
+                    // println!("parallel");
+                    if let Some(factor) = right_factor {
+                        let (mut a, mut b) = rayon::join(|| self.evaluate_rec(left_factor), || self.evaluate_rec(factor));
+                        a.append(&mut b);
+                        evald = a;
+                    } else {
+                        evald = self.evaluate_rec(left_factor);
+                    }
+                // }
                 if action != NULL_ACTION {
                     let mut list = LinkedList::new();
                     list.push_back(self.eval.product(action as u32, &mut evald));
