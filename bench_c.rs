@@ -604,8 +604,7 @@ fn grammar() -> Grammar<176> {
     grammar
 }
 
-#[bench]
-fn bench_parse_c(b: &mut test::Bencher) {
+fn bench_parse_c(b: &mut test::Bencher, contents: &str) {
     use c_lexer_logos::token::Token::*;
     use c_lexer_logos::Lexer;
     let external = grammar();
@@ -788,7 +787,6 @@ fn bench_parse_c(b: &mut test::Bencher) {
         equal,
     ] = external.symbols();
 
-    let contents = include_str!("./part_gcc_test.i");
     let tokens: Vec<_> = Lexer::lex(&contents[..])
         .unwrap()
         .into_iter()
@@ -942,3 +940,22 @@ fn bench_parse_c(b: &mut test::Bencher) {
         test::black_box(&rec.forest);
     });
 }
+
+#[bench]
+fn bench_parse_part(b: &mut Bencher) {
+    let contents = include_str!("./part_gcc_test.i");
+    bench_parse_c(b, contents);
+} 
+
+#[bench]
+fn bench_parse_whole(b: &mut Bencher) {
+    let contents = include_str!("./whole_gcc_test.i");
+    bench_parse_c(b, contents);
+} 
+
+
+#[bench]
+fn bench_parse_test(b: &mut Bencher) {
+    let contents = include_str!("./test.i");
+    bench_parse_c(b, contents);
+} 

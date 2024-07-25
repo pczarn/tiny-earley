@@ -19,7 +19,7 @@ c_lexer_logos = "0.1"
 opt-level = 3               # Use slightly better optimizations.
 
 [features]
-default = ["debug", "depth_rel_compact_forest"]
+default = ["debug", "vec_rel_compact_forest"]
 debug = []
 simple = []
 extra_inline = []
@@ -34,3 +34,5 @@ parallel_rel_compact_forest = ["not_simplest_forest", "dep:rayon", "forest_eval"
 depth_rel_compact_forest = ["not_simplest_forest", "dep:rayon", "forest_eval", "vec2d"]
 not_simplest_forest = []
 forest_eval = []
+vec_rel_compact_forest = ["not_simplest_forest", "forest_eval"]
+nonrec_vec_rel_compact_forest = ["not_simplest_forest", "forest_eval"]

@@ -1,5 +1,6 @@
 #![feature(stmt_expr_attributes)]
 #![feature(test)]
+#![feature(portable_simd)]
 
 extern crate test;
 
@@ -10,15 +11,17 @@ extern crate test;
 #[cfg_attr(feature = "rel_compact_forest", path = "rel_compact_forest.rs")]
 #[cfg_attr(feature = "parallel_rel_compact_forest", path = "parallel_rel_compact_forest.rs")]
 #[cfg_attr(feature = "depth_rel_compact_forest", path = "depth_rel_compact_forest.rs")]
-mod parallel2_rel_compact_forest;
+#[cfg_attr(feature = "vec_rel_compact_forest", path = "vec_rel_compact_forest.rs")]
+#[cfg_attr(feature = "nonrec_vec_rel_compact_forest", path = "nonrec_vec_rel_compact_forest.rs")]
+mod forest;
 
 use test::Bencher;
 
 use std::{collections::BinaryHeap, ops::Index};
-#[cfg(feature = "debug")]
+// #[cfg(feature = "debug")]
 use std::collections::{BTreeMap, BTreeSet};
 
-use self::parallel2_rel_compact_forest::*;
+use self::forest::*;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd)]
 pub struct Symbol(u32);
@@ -307,7 +310,7 @@ impl<const S: usize> Grammar<S> {
             start_symbol: Symbol(start_symbol as u32),
             symbol_names,
             gen_symbols: 0,
-            rule_id: 0,
+            rule_id: 2,
             lhs: Symbol(0),
             nulling: BTreeMap::new(),
             rhs_nulling: vec![],
@@ -926,7 +929,7 @@ struct E {
 }
 
 #[cfg(feature = "forest_eval")]
-impl self::parallel2_rel_compact_forest::Eval for E {
+impl self::forest::Eval for E {
     type Elem = Value;
 
     fn leaf(&self, terminal: Symbol, values: u32) -> Self::Elem {
@@ -939,6 +942,45 @@ impl self::parallel2_rel_compact_forest::Eval for E {
         }
     }
 
+    #[cfg(any(feature = "vec_rel_compact_forest", feature = "nonrec_vec_rel_compact_forest"))]
+    fn product(&self, action: u32, args: Vec<Self::Elem>) -> Self::Elem {
+        let [sum, factor, op_mul, op_div, lparen, rparen, _expr_sym, op_minus, op_plus, _number, _whole, digit, dot] =
+            self.symbols;
+        // let mut iter = args.into_iter();
+        match (
+            action,
+            args.get(0).cloned().unwrap_or(Value::None),
+            args.get(1).cloned().unwrap_or(Value::None),
+            args.get(2).cloned().unwrap_or(Value::None),
+        ) {
+            (2, Value::Float(left), _, Value::Float(right)) => Value::Float(left + right),
+            (3, Value::Float(left), _, Value::Float(right)) => Value::Float(left - right),
+            (4, val, Value::None, Value::None) => val,
+            (5, Value::Float(left), _, Value::Float(right)) => Value::Float(left * right),
+            (6, Value::Float(left), _, Value::Float(right)) => Value::Float(left / right),
+            (7, val, Value::None, Value::None) => val,
+            (8, _, val, _) => val,
+            (9, _, Value::Float(num), Value::None) => Value::Float(-num),
+            (10, Value::Digits(digits), Value::None, Value::None) => {
+                Value::Float(digits.parse::<f64>().unwrap())
+            }
+            (11, val @ Value::Digits(..), _, _) => val,
+            (12, Value::Digits(before_dot), _, Value::Digits(after_dot)) => {
+                let mut digits = before_dot;
+                digits.push('.');
+                digits.push_str(&after_dot[..]);
+                Value::Digits(digits)
+            }
+            (13, Value::Digits(mut num), Value::Digits(digit), _) => {
+                num.push_str(&digit[..]);
+                Value::Digits(num)
+            }
+            (14, val @ Value::Digits(..), _, _) => val,
+            args => panic!("unknown rule id {:?} or args {:?}", action, args),
+        }
+    }
+
+    #[cfg(not(any(feature = "vec_rel_compact_forest", feature = "nonrec_vec_rel_compact_forest")))]
     fn product(&self, action: u32, args: &mut std::collections::LinkedList<Self::Elem>) -> Self::Elem {
         let [sum, factor, op_mul, op_div, lparen, rparen, _expr_sym, op_minus, op_plus, _number, _whole, digit, dot] =
             self.symbols;
@@ -948,29 +990,29 @@ impl self::parallel2_rel_compact_forest::Eval for E {
             args.pop_front().unwrap_or(Value::None),
             args.pop_front().unwrap_or(Value::None),
         ) {
-            (0, Value::Float(left), _, Value::Float(right)) => Value::Float(left + right),
-            (1, Value::Float(left), _, Value::Float(right)) => Value::Float(left - right),
-            (2, val, Value::None, Value::None) => val,
-            (3, Value::Float(left), _, Value::Float(right)) => Value::Float(left * right),
-            (4, Value::Float(left), _, Value::Float(right)) => Value::Float(left / right),
-            (5, val, Value::None, Value::None) => val,
-            (6, _, val, _) => val,
-            (7, _, Value::Float(num), Value::None) => Value::Float(-num),
-            (8, Value::Digits(digits), Value::None, Value::None) => {
+            (2, Value::Float(left), _, Value::Float(right)) => Value::Float(left + right),
+            (3, Value::Float(left), _, Value::Float(right)) => Value::Float(left - right),
+            (4, val, Value::None, Value::None) => val,
+            (5, Value::Float(left), _, Value::Float(right)) => Value::Float(left * right),
+            (6, Value::Float(left), _, Value::Float(right)) => Value::Float(left / right),
+            (7, val, Value::None, Value::None) => val,
+            (8, _, val, _) => val,
+            (9, _, Value::Float(num), Value::None) => Value::Float(-num),
+            (10, Value::Digits(digits), Value::None, Value::None) => {
                 Value::Float(digits.parse::<f64>().unwrap())
             }
-            (9, val @ Value::Digits(..), _, _) => val,
-            (10, Value::Digits(before_dot), _, Value::Digits(after_dot)) => {
+            (11, val @ Value::Digits(..), _, _) => val,
+            (12, Value::Digits(before_dot), _, Value::Digits(after_dot)) => {
                 let mut digits = before_dot;
                 digits.push('.');
                 digits.push_str(&after_dot[..]);
                 Value::Digits(digits)
             }
-            (11, Value::Digits(mut num), Value::Digits(digit), _) => {
+            (13, Value::Digits(mut num), Value::Digits(digit), _) => {
                 num.push_str(&digit[..]);
                 Value::Digits(num)
             }
-            (12, val @ Value::Digits(..), _, _) => val,
+            (14, val @ Value::Digits(..), _, _) => val,
             args => panic!("unknown rule id {:?} or args {:?}", action, args),
         }
     }
@@ -1093,7 +1135,7 @@ impl CalcRecognizer {
         if let Value::Float(num) = result {
             num
         } else {
-            panic!("evaluation failed")
+            panic!("evaluation failed {:?}", result)
         }
     }
 }

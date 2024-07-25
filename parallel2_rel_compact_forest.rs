@@ -17,6 +17,14 @@ impl<T> Vec2d<T> {
             items: vec![],
         }
     }
+
+    fn row_count(&self) -> usize {
+        
+    }
+
+    fn get_row(&self) -> &[T] {
+        &self.items[self.indices[self.indices.len() - 1]]
+    }
 }
 
 #[derive(Clone)]

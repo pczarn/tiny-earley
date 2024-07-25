@@ -1,6 +1,6 @@
 // Forest
 
-use std::{collections::LinkedList, iter};
+use std::{collections::LinkedList, iter, simd::{u64x4, Simd}};
 
 use super::*;
 
@@ -32,27 +32,15 @@ enum Node {
     },
 }
 
-static NODE_SIZES: &'static [(u8, u8, u8, bool)] = &[
-    (8, 8, 0, false),
-    (16, 16, 0, false),
-    (32, 32, 0, false),
-    (32, 64, 0, false),
-    (8, 8, 0, true),
-    (8, 8, 8, true),
-    (8, 16, 8, true),
-    (16, 16, 8, true),
-    (8, 16, 16, true),
-    (8, 16, 0, true),
-    (8, 24, 24, true),
-    (16, 24, 24, true),
-    (16, 32, 32, true),
-    (16, 32, 0, true),
-    (32, 64, 64, true),
-    (32, 64, 0, true),
-    (32, 64, 16, true),
-];
+// const fn gen() -> [(u8, u8, u8, bool); 8 * 8 * 8] {
+//     let mut result = [(0, 0, 0, false); 512];
+//     for 
+//     result
+// }
 
-const NULL_ACTION: u32 = 0;
+// static NODE_SIZES: [(u8, u8, u8, bool); 512] = gen();
+
+const NULL_ACTION: u32 = 1;
 
 impl Forest {
     fn push_node(&mut self, node: Node) {
@@ -60,32 +48,41 @@ impl Forest {
             let mut result = 0;
             while x != 0 {
                 x = x >> 8;
-                result += 8;
+                result += 1;
             }
             result
         };
         let tup = match node {
             Node::Product { action, left_factor, right_factor } => {
-                (action as u32, (self.graph.len() - left_factor.get()) as u64, right_factor.map_or(0, |f| (self.graph.len() - f.get()) as u64), true)
+                (action as u32, (self.graph.len() - left_factor.get()) as u64, right_factor.map_or(0, |f| (self.graph.len() - f.get()) as u64))
             }
             Node::Leaf { terminal, values } => {
-                (terminal.0 as u32, values as u64, 0, false)
+                (0, terminal.0 as u64, values as u64)
             }
         };
         let s = (size(tup.0 as u64), size(tup.1), size(tup.2));
-        let (idx, size) = NODE_SIZES.iter().enumerate().find(|(_i, sizes)| s.0 <= sizes.0 && s.1 <= sizes.1 && s.2 <= sizes.2 && tup.3 == sizes.3).unwrap();
-        // if idx.is_none() {
-        //     panic!("wrong size for {:?} {:?}", tup, size(tup.1));
-        // }
-        // let idx = idx.unwrap();
-        // let size = NODE_SIZES[idx];
+        let idx = s.0 + s.1 * 4 + s.2 * 4 * 8;
+        self.graph.push(idx);
+        self.graph.extend(&u32::to_le_bytes(tup.0)[0 .. s.0 as usize]);
+        self.graph.extend(&u64::to_le_bytes(tup.1)[0 .. s.1 as usize]);
+        self.graph.extend(&u64::to_le_bytes(tup.2)[0 .. s.2 as usize]);
+        // let (idx, size) = NODE_SIZES.iter().enumerate().find(|(_i, sizes)| s.0 <= sizes.0 && s.1 <= sizes.1 && s.2 <= sizes.2 && tup.3 == sizes.3).unwrap();
+        // // if idx.is_none() {
+        // //     panic!("wrong size for {:?} {:?}", tup, size(tup.1));
+        // // }
+        // // let idx = idx.unwrap();
+        // // let size = NODE_SIZES[idx];
 
-        let mut result = [0u8; 24];
-        result[0 .. size.0 as usize / 8].copy_from_slice(&u32::to_le_bytes(tup.0)[0 .. size.0 as usize / 8]);
-        result[size.0 as usize / 8 .. size.0 as usize / 8 + size.1 as usize / 8].copy_from_slice(&u64::to_le_bytes(tup.1)[0 .. size.1 as usize / 8]);
-        result[size.0 as usize / 8 + size.1 as usize / 8 .. size.0 as usize / 8 + size.1 as usize / 8 + size.2 as usize / 8].copy_from_slice(&u64::to_le_bytes(tup.2)[0 .. size.2 as usize / 8]);
-        self.graph.push(idx as u8);
-        self.graph.extend(result[0 .. size.0 as usize / 8 + size.1 as usize / 8 + size.2 as usize / 8].into_iter().cloned());
+        // let mut result = [0u8; 24];
+        // let val = u64x4::from(0);
+
+        // let zeros = Simd::from_array([0, 0, 0, 0, 0, 0, 0, 0]);
+
+        // result[0 .. size.0 as usize / 8].copy_from_slice(&u32::to_le_bytes(tup.0)[0 .. size.0 as usize / 8]);
+        // result[size.0 as usize / 8 .. size.0 as usize / 8 + size.1 as usize / 8].copy_from_slice(&u64::to_le_bytes(tup.1)[0 .. size.1 as usize / 8]);
+        // result[size.0 as usize / 8 + size.1 as usize / 8 .. size.0 as usize / 8 + size.1 as usize / 8 + size.2 as usize / 8].copy_from_slice(&u64::to_le_bytes(tup.2)[0 .. size.2 as usize / 8]);
+        // self.graph.push(idx as u8);
+        // self.graph.extend(result[0 .. size.0 as usize / 8 + size.1 as usize / 8 + size.2 as usize / 8].into_iter().cloned());
     }
 }
 
@@ -96,7 +93,7 @@ impl Forest {
 
     pub fn new<const S: usize>(grammar: &Grammar<S>) -> Self {
         Self {
-            graph: vec![0],
+            graph: vec![0, 0],
             eval: grammar.rules.iter().map(|rule| rule.id).collect(),
         }
     }
@@ -127,26 +124,27 @@ impl Forest {
 
     fn get(&self, handle: NodeHandle) -> Node {
         let slice = &self.graph[handle.get() ..];
-        let size = NODE_SIZES[slice[0] as usize];
-        let all = &slice[1 .. size.0 as usize / 8 + size.1 as usize / 8 + size.2 as usize / 8 + 1];
-        let (first, second) = all.split_at(size.0 as usize / 8);
-        let (second, third) = second.split_at(size.1 as usize / 8);
+        let size = slice[0];
+        let s = (size % 4, (size / 4) % 8, size / 4 / 8);
+        let all = &slice[1 .. (s.0 + s.1 + s.2) as usize + 1];
+        let (first, second) = all.split_at(s.0 as usize);
+        let (second, third) = second.split_at(s.1 as usize);
         let mut a = [0; 4];
         a[0 .. first.len()].copy_from_slice(first);
         let mut b = [0; 8];
         b[0 .. second.len()].copy_from_slice(second);
         let mut c = [0; 8];
         c[0 .. third.len()].copy_from_slice(third);
-        if size.3 {
+        if s.0 == 0 {
             Node::Product {
                 action: u32::from_le_bytes(a),
                 left_factor: NodeHandle(u64::from_le_bytes(b) as usize, handle.get()),
-                right_factor: if size.2 == 0 { None } else { Some(NodeHandle(u64::from_le_bytes(c) as usize, handle.get())) },
+                right_factor: if s.2 == 0 { None } else { Some(NodeHandle(u64::from_le_bytes(c) as usize, handle.get())) },
             }
         } else {
             Node::Leaf {
-                terminal: Symbol(u32::from_le_bytes(a)),
-                values: u32::from_le_bytes([b[0], b[1], b[2], b[3]]),
+                terminal: Symbol(u64::from_le_bytes(b) as u32),
+                values: u64::from_le_bytes(c) as u32,
             }
         }
     }
@@ -175,10 +173,12 @@ impl<'a, T: Eval + Send + Sync> Evaluator<'a, T> {
                 right_factor,
                 action,
             } => {
+                // panic!("{:?}", ::rayon::current_num_threads());
+                // println!("xyz");
                 // add parallel
                 // let mut evald = self.evaluate_rec(left_factor);
                 let mut evald;
-                if depth > 30 {
+                // if depth > 30 {
                     if let Some(factor) = right_factor {
                         let mut a = self.evaluate_rec(left_factor, depth + 1);
                         a.append(&mut self.evaluate_rec(factor, depth + 1));
@@ -186,15 +186,15 @@ impl<'a, T: Eval + Send + Sync> Evaluator<'a, T> {
                     } else {
                         evald = self.evaluate_rec(left_factor, depth);
                     }
-                } else {
-                    if let Some(factor) = right_factor {
-                        let (mut a, mut b) = rayon::join(|| self.evaluate_rec(left_factor, depth + 1), || self.evaluate_rec(factor, depth + 1));
-                        a.append(&mut b);
-                        evald = a;
-                    } else {
-                        evald = self.evaluate_rec(left_factor, depth);
-                    }
-                }
+                // } else {
+                //     if let Some(factor) = right_factor {
+                //         let (mut a, mut b) = rayon::join(|| self.evaluate_rec(left_factor, depth + 1), || self.evaluate_rec(factor, depth + 1));
+                //         a.append(&mut b);
+                //         evald = a;
+                //     } else {
+                //         evald = self.evaluate_rec(left_factor, depth);
+                //     }
+                // }
                 if action != NULL_ACTION {
                     let mut list = LinkedList::new();
                     list.push_back(self.eval.product(action as u32, &mut evald));
