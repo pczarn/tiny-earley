@@ -19,7 +19,7 @@ impl NodeHandle {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 enum Node {
     Product {
         action: u32,
@@ -34,7 +34,7 @@ enum Node {
 
 // const fn gen() -> [(u8, u8, u8, bool); 8 * 8 * 8] {
 //     let mut result = [(0, 0, 0, false); 512];
-//     for 
+//     for
 //     result
 // }
 
@@ -53,19 +53,23 @@ impl Forest {
             result
         };
         let tup = match node {
-            Node::Product { action, left_factor, right_factor } => {
-                (action as u32, (self.graph.len() - left_factor.get()) as u64, right_factor.map_or(0, |f| (self.graph.len() - f.get()) as u64))
-            }
-            Node::Leaf { terminal, values } => {
-                (0, terminal.0 as u64, values as u64)
-            }
+            Node::Product {
+                action,
+                left_factor,
+                right_factor,
+            } => (
+                action as u32,
+                (self.graph.len() - left_factor.get()) as u64,
+                right_factor.map_or(0, |f| (self.graph.len() - f.get()) as u64),
+            ),
+            Node::Leaf { terminal, values } => (0, terminal.0 as u64, values as u64),
         };
         let s = (size(tup.0 as u64), size(tup.1), size(tup.2));
         let idx = s.0 + s.1 * 4 + s.2 * 4 * 8;
         self.graph.push(idx);
-        self.graph.extend(&u32::to_le_bytes(tup.0)[0 .. s.0 as usize]);
-        self.graph.extend(&u64::to_le_bytes(tup.1)[0 .. s.1 as usize]);
-        self.graph.extend(&u64::to_le_bytes(tup.2)[0 .. s.2 as usize]);
+        self.graph.extend(&u32::to_le_bytes(tup.0)[0..s.0 as usize]);
+        self.graph.extend(&u64::to_le_bytes(tup.1)[0..s.1 as usize]);
+        self.graph.extend(&u64::to_le_bytes(tup.2)[0..s.2 as usize]);
         // let (idx, size) = NODE_SIZES.iter().enumerate().find(|(_i, sizes)| s.0 <= sizes.0 && s.1 <= sizes.1 && s.2 <= sizes.2 && tup.3 == sizes.3).unwrap();
         // // if idx.is_none() {
         // //     panic!("wrong size for {:?} {:?}", tup, size(tup.1));
@@ -116,30 +120,31 @@ impl Forest {
     }
 
     pub fn evaluator<T: Eval>(&mut self, eval: T) -> Evaluator<T> {
-        Evaluator {
-            forest: self,
-            eval,
-        }
+        Evaluator { forest: self, eval }
     }
 
     fn get(&self, handle: NodeHandle) -> Node {
-        let slice = &self.graph[handle.get() ..];
+        let slice = &self.graph[handle.get()..];
         let size = slice[0];
         let s = (size % 4, (size / 4) % 8, size / 4 / 8);
-        let all = &slice[1 .. (s.0 + s.1 + s.2) as usize + 1];
+        let all = &slice[1..(s.0 + s.1 + s.2) as usize + 1];
         let (first, second) = all.split_at(s.0 as usize);
         let (second, third) = second.split_at(s.1 as usize);
         let mut a = [0; 4];
-        a[0 .. first.len()].copy_from_slice(first);
+        a[0..first.len()].copy_from_slice(first);
         let mut b = [0; 8];
-        b[0 .. second.len()].copy_from_slice(second);
+        b[0..second.len()].copy_from_slice(second);
         let mut c = [0; 8];
-        c[0 .. third.len()].copy_from_slice(third);
+        c[0..third.len()].copy_from_slice(third);
         if s.0 != 0 {
             Node::Product {
                 action: u32::from_le_bytes(a),
                 left_factor: NodeHandle(u64::from_le_bytes(b) as usize, handle.get()),
-                right_factor: if s.2 == 0 { None } else { Some(NodeHandle(u64::from_le_bytes(c) as usize, handle.get())) },
+                right_factor: if s.2 == 0 {
+                    None
+                } else {
+                    Some(NodeHandle(u64::from_le_bytes(c) as usize, handle.get()))
+                },
             }
         } else {
             Node::Leaf {
@@ -161,41 +166,95 @@ pub struct Evaluator<'a, T> {
     forest: &'a mut Forest,
 }
 
-impl<'a, T: Eval + Send + Sync> Evaluator<'a, T> where T::Elem: ::std::fmt::Debug {
+struct Work<Elem> {
+    node: Node,
+    progress: u32,
+    parent: u32,
+    result: Vec<Elem>,
+}
+
+impl<'a, T: Eval + Send + Sync> Evaluator<'a, T>
+where
+    T::Elem: ::std::fmt::Debug,
+{
     pub fn evaluate(&self, finished_node: NodeHandle) -> T::Elem {
-        let mut stack = vec![(Node::Leaf { terminal: Symbol(0), values: 0 }, 0, vec![], false), (self.forest.get(finished_node), 0, vec![], false)];
+        let mut stack = vec![
+            Work {
+                node: Node::Leaf {
+                    terminal: Symbol(0),
+                    values: 0,
+                },
+                progress: 0,
+                parent: 0,
+                result: vec![],
+            },
+            Work {
+                node: self.forest.get(finished_node),
+                progress: 0,
+                parent: 0,
+                result: vec![],
+            },
+        ];
         while stack.len() > 1 {
-            let (node, idx, work, finalize) = stack.pop().expect("stack too small");
-            match node {
-                Node::Product {
+            let mut work = stack.pop().expect("stack too small");
+            match (work.node, work.progress) {
+                (Node::Product {
                     left_factor,
                     right_factor,
                     action,
-                } => {
-                    if action != NULL_ACTION {
-                        if finalize {
-                            stack[idx].2.push(self.eval.product(action as u32, work));
-                        } else {
-                            let stack_len = stack.len();
-                            stack.push((node, idx, work, true));
-                            if let Some(factor) = right_factor {
-                                stack.push((self.forest.get(factor), stack_len, vec![], false));
-                            }
-                            stack.push((self.forest.get(left_factor), stack_len, vec![], false));
-                        }
-                    } else {
-                        if let Some(factor) = right_factor {
-                            stack.push((self.forest.get(factor), idx, vec![], false));
-                        }
-                        stack.push((self.forest.get(left_factor), idx, vec![], false));
-                    }
+                }, 0) => {
+                    work.progress = 1;
+                    let new = Work {
+                        node: self.forest.get(left_factor),
+                        progress: 0,
+                        parent: if action == NULL_ACTION { work.parent } else { stack.len() as u32 },
+                        result: vec![],
+                    };
+                    stack.push(work);
+                    stack.push(new);
                 }
-                Node::Leaf { terminal, values } => {
-                    stack[idx].2.push(self.eval.leaf(terminal, values));
+                (Node::Product {
+                    left_factor,
+                    right_factor: Some(right),
+                    action,
+                }, 1) => {
+                    work.progress = 2;
+                    let new = Work {
+                        node: self.forest.get(right),
+                        progress: 0,
+                        parent: if action == NULL_ACTION { work.parent } else { stack.len() as u32 },
+                        result: vec![],
+                    };
+                    stack.push(work);
+                    stack.push(new);
+                }
+                (Node::Product {
+                    left_factor,
+                    right_factor,
+                    action: NULL_ACTION,
+                }, _) => {}
+                (Node::Product {
+                    left_factor,
+                    right_factor,
+                    action,
+                }, _) => {
+                    let evaluated = self.eval.product(action, work.result);
+                    stack[work.parent as usize].result.push(evaluated);
+                }
+                (Node::Leaf { terminal, values }, _) => {
+                    let evaluated = self.eval.leaf(terminal, values);
+                    stack[work.parent as usize].result.push(evaluated);
                 }
             }
         }
-        stack.into_iter().next().unwrap().2.into_iter().next().unwrap()
+        stack
+            .into_iter()
+            .next()
+            .unwrap()
+            .result
+            .into_iter()
+            .next()
+            .unwrap()
     }
 }
 

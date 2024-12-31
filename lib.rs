@@ -1,18 +1,8 @@
 #![feature(stmt_expr_attributes)]
 #![feature(test)]
-#![feature(portable_simd)]
 
 extern crate test;
 
-#[cfg_attr(not(feature = "not_simplest_forest"), path = "simplest_forest.rs")]
-#[cfg_attr(feature = "simple_forest", path = "simple_forest.rs")]
-#[cfg_attr(feature = "compact_forest", path = "compact_forest.rs")]
-#[cfg_attr(feature = "linked_forest", path = "linked_forest.rs")]
-#[cfg_attr(feature = "rel_compact_forest", path = "rel_compact_forest.rs")]
-#[cfg_attr(feature = "parallel_rel_compact_forest", path = "parallel_rel_compact_forest.rs")]
-#[cfg_attr(feature = "depth_rel_compact_forest", path = "depth_rel_compact_forest.rs")]
-#[cfg_attr(feature = "vec_rel_compact_forest", path = "vec_rel_compact_forest.rs")]
-#[cfg_attr(feature = "nonrec_vec_rel_compact_forest", path = "nonrec_vec_rel_compact_forest.rs")]
 mod forest;
 
 use test::Bencher;
@@ -68,7 +58,6 @@ struct Tables<const S: usize> {
     rules_by_rhs0: Vec<Rule>,
     completions: Vec<Vec<PredictionTransition>>,
     symbol_names: [&'static str; S],
-    #[cfg(feature = "simple")]
     gen_completions: Vec<PredictionTransition>,
 }
 
@@ -91,7 +80,6 @@ pub struct Recognizer<const S: usize> {
     pub finished_node: Option<NodeHandle>,
 }
 
-#[cfg(any(feature = "vec2d", feature = "parallel_rel_compact_forest"))]
 #[derive(Clone)]
 struct EarleyChart<const S: usize> {
     predicted: Vec<[bool; S]>,
@@ -99,13 +87,6 @@ struct EarleyChart<const S: usize> {
     items: Vec<Item>,
 }
 
-#[cfg(not(any(feature = "vec2d", feature = "parallel_rel_compact_forest")))]
-#[derive(Clone)]
-struct EarleyChart<const S: usize> {
-    sets: Vec<EarleySet<S>>,
-}
-
-#[cfg(any(feature = "vec2d", feature = "parallel_rel_compact_forest"))]
 impl<const S: usize> EarleyChart<S> {
     fn next_set(&mut self, predicted: Option<[bool; S]>) {
         self.predicted.push(predicted.unwrap_or([false; S]));
@@ -133,89 +114,26 @@ impl<const S: usize> EarleyChart<S> {
     }
 
     fn next_medial(&self) -> &[Item] {
-        &self.items[self.indices[self.indices.len() - 1] .. ]
+        &self.items[self.indices[self.indices.len() - 1]..]
     }
 
     fn last(&self) -> EarleySetRef {
-        let items = &self.items[self.indices[self.indices.len() - 1] ..];
+        let items = &self.items[self.indices[self.indices.len() - 1]..];
         let predicted = &self.predicted.last().unwrap()[..];
-        EarleySetRef {
-            items,
-            predicted,
-        }
+        EarleySetRef { items, predicted }
     }
 
     fn next_to_last(&self) -> EarleySetRef {
-        let items = &self.items[self.indices[self.indices.len() - 2] .. self.indices[self.indices.len() - 1]];
+        let items =
+            &self.items[self.indices[self.indices.len() - 2]..self.indices[self.indices.len() - 1]];
         let predicted = &self.predicted[self.predicted.len() - 2][..];
-        EarleySetRef {
-            items,
-            predicted,
-        }
+        EarleySetRef { items, predicted }
     }
 
     fn last_mut(&mut self) -> EarleySetMut {
         EarleySetMut {
-            items: &mut self.items[self.indices[self.indices.len() - 1] ..],
-            predicted: &mut self.predicted.last_mut().unwrap()[..]
-        }
-    }
-}
-
-
-#[cfg(not(any(feature = "vec2d", feature = "parallel_rel_compact_forest")))]
-impl<const S: usize> EarleyChart<S> {
-    fn next_set(&mut self, predicted: Option<[bool; S]>) {
-        self.sets.push(EarleySet { predicted: predicted.unwrap_or([false; S]), medial: vec![] });
-    }
-
-    fn new() -> Self {
-        EarleyChart {
-            sets: vec![],
-        }
-    }
-
-    fn len(&self) -> usize {
-        self.sets.len()
-    }
-
-    fn push(&mut self, set: EarleySet<S>) {
-        self.sets.push(set);
-    }
-
-    fn predicted(&self, index: usize) -> &[bool] {
-        &self.sets[index].predicted[..]
-    }
-
-    fn last(&self) -> EarleySetRef {
-        let last = self.sets.last().unwrap();
-        EarleySetRef {
-            items: &last.medial[..],
-            predicted: &last.predicted[..],
-        }
-    }
-
-    fn next_to_last(&self) -> EarleySetRef {
-        let last = &self.sets[self.sets.len() - 2];
-        EarleySetRef {
-            items: &last.medial[..],
-            predicted: &last.predicted[..],
-        }
-    }
-
-    fn medial(&mut self) -> &mut Vec<Item> {
-        &mut self.sets.last_mut().unwrap().medial
-    }
-
-    fn next_medial(&self) -> &[Item] {
-        &self.sets.last().unwrap().medial[..]
-    }
-
-    fn last_mut(&mut self) -> EarleySetMut {
-        let last = self.sets.last_mut().unwrap();
-        EarleySetMut {
-        items: &mut last.medial[..],
-        predicted: &mut last.predicted[..]
+            items: &mut self.items[self.indices[self.indices.len() - 1]..],
+            predicted: &mut self.predicted.last_mut().unwrap()[..],
         }
     }
 }
@@ -230,19 +148,10 @@ struct EarleySetRef<'a> {
     predicted: &'a [bool],
 }
 
-#[cfg(any(feature = "vec2d", feature = "parallel_rel_compact_forest"))]
 impl<const S: usize> Index<usize> for EarleyChart<S> {
     type Output = [Item];
     fn index(&self, index: usize) -> &Self::Output {
-        &self.items[self.indices[index] .. self.indices[index + 1]]
-    }
-}
-
-#[cfg(not(any(feature = "vec2d", feature = "parallel_rel_compact_forest")))]
-impl<const S: usize> Index<usize> for EarleyChart<S> {
-    type Output = [Item];
-    fn index(&self, index: usize) -> &Self::Output {
-        &self.sets[index].medial[..]
+        &self.items[self.indices[index]..self.indices[index + 1]]
     }
 }
 
@@ -280,7 +189,7 @@ impl<const S: usize> UnionWith for [bool; S] {
     }
 }
 
-impl<'a> UnionWith for &'a  mut [bool] {
+impl<'a> UnionWith for &'a mut [bool] {
     fn union_with(&mut self, other: &[bool]) {
         for (dst, &src) in self.iter_mut().zip(other.iter()) {
             *dst |= src;
@@ -326,14 +235,14 @@ impl<const S: usize> Grammar<S> {
     }
 
     pub fn rule<const N: usize>(&mut self, lhs: Symbol, rhs: [Symbol; N]) -> &mut Self {
-        if rhs.len() == 0 {
+        if N == 0 {
             self.nulling.insert(lhs, self.rule_id);
             self.rule_id += 1;
             self.lhs = lhs;
             return self;
         }
         let mut cur_rhs0 = rhs[0];
-        for i in 1..N - 1 {
+        for i in 1 .. N - 1 {
             let gensym = Symbol(self.gen_symbols + S as u32);
             self.gen_symbols += 1;
             self.rules.push(Rule {
@@ -357,7 +266,7 @@ impl<const S: usize> Grammar<S> {
 
     fn rhs<const N: usize>(&mut self, rhs: [Symbol; N]) -> &mut Self {
         self.rule(self.lhs, rhs);
-        self       
+        self
     }
 
     fn sort_rules(&mut self) {
@@ -373,29 +282,77 @@ impl<const S: usize> Grammar<S> {
             for rule in &self.rules {
                 if let Some(_id) = self.nulling.get(&rule.rhs0) {
                     if let Some(rhs1) = rule.rhs1 {
-                        new_rules.push(Rule { lhs: rule.lhs, rhs0: rhs1, rhs1: None, id: rule.id });
+                        new_rules.push(Rule {
+                            lhs: rule.lhs,
+                            rhs0: rhs1,
+                            rhs1: None,
+                            id: rule.id,
+                        });
                         if let Some(_id) = self.nulling.get(&rhs1) {
-                            self.rhs_nulling.push(NullingEliminated { rule_id: rule.id, side: Side::Both, sym: rule.rhs0 });
-                            change |= self.nulling.insert(rule.lhs, rule.id.unwrap_or(0)).is_none();
+                            self.rhs_nulling.push(NullingEliminated {
+                                rule_id: rule.id,
+                                side: Side::Both,
+                                sym: rule.rhs0,
+                            });
+                            change |= self
+                                .nulling
+                                .insert(rule.lhs, rule.id.unwrap_or(0))
+                                .is_none();
                         } else {
-                            self.rhs_nulling.push(NullingEliminated { rule_id: rule.id, side: Side::Left, sym: rule.rhs0 });
+                            self.rhs_nulling.push(NullingEliminated {
+                                rule_id: rule.id,
+                                side: Side::Left,
+                                sym: rule.rhs0,
+                            });
                         }
                     } else {
                         // TODO rule.id
-                        self.rhs_nulling.push(NullingEliminated { rule_id: rule.id, side: Side::Left, sym: rule.rhs0 });
-                        change |= self.nulling.insert(rule.lhs, rule.id.unwrap_or(0)).is_none();
+                        self.rhs_nulling.push(NullingEliminated {
+                            rule_id: rule.id,
+                            side: Side::Left,
+                            sym: rule.rhs0,
+                        });
+                        change |= self
+                            .nulling
+                            .insert(rule.lhs, rule.id.unwrap_or(0))
+                            .is_none();
                     }
                 }
                 if let Some(rhs1) = rule.rhs1 {
                     if let Some(_id) = self.nulling.get(&rhs1) {
-                        self.rhs_nulling.push(NullingEliminated { rule_id: rule.id, side: Side::Right, sym: rhs1 });
-                        new_rules.push(Rule { lhs: rule.lhs, rhs0: rule.rhs0, rhs1: None, id: rule.id });
+                        self.rhs_nulling.push(NullingEliminated {
+                            rule_id: rule.id,
+                            side: Side::Right,
+                            sym: rhs1,
+                        });
+                        new_rules.push(Rule {
+                            lhs: rule.lhs,
+                            rhs0: rule.rhs0,
+                            rhs1: None,
+                            id: rule.id,
+                        });
                     }
                 }
-
             }
         }
         self.rules.extend(new_rules);
+    }
+
+    fn stringify_to_bnf(&self) -> String {
+        use std::fmt::Write;
+        let mut result = String::new();
+        for (i, rule) in self.rules.iter().enumerate() {
+            let tostr = |sym: Symbol| if sym.usize() >= S { format!("g{}({})", sym.usize() - S, sym.usize()) } else { format!("{}({})", self.symbol_names[sym.usize()], sym.usize()) };
+            let lhs = tostr(rule.lhs);
+            let rhs0 = tostr(rule.rhs0);
+            let rhs1 = if let Some(rhs1) = rule.rhs1 {
+                format!(" {}", tostr(rhs1))
+            } else {
+                "".to_string()
+            };
+            writeln!(&mut result, "{}: {} ::= {}{};", i, lhs, rhs0, rhs1).unwrap();
+        }
+        result
     }
 }
 
@@ -429,9 +386,10 @@ impl<const S: usize> Recognizer<S> {
         result
     }
 
-
     fn initialize(&mut self) {
-        self.earley_chart.next_set(Some(self.tables.prediction_matrix[self.tables.start_symbol.usize()]));
+        self.earley_chart.next_set(Some(
+            self.tables.prediction_matrix[self.tables.start_symbol.usize()],
+        ));
         self.earley_chart.next_set(None);
     }
 
@@ -451,16 +409,11 @@ impl<const S: usize> Recognizer<S> {
             // Do the rest.
             self.sort_medial_items();
             self.prediction_pass();
-            #[cfg(not(any(feature = "vec2d", feature = "parallel_rel_compact_forest")))]
-            self.earley_chart.sets
-                .push(EarleySet::new());
-            #[cfg(any(feature = "vec2d", feature = "parallel_rel_compact_forest"))]
             self.earley_chart.next_set(None);
             true
         }
     }
 
-    #[cfg_attr(feature = "extra_inline", inline)]
     fn is_exhausted(&self) -> bool {
         self.earley_chart.next_medial().len() == 0 && self.complete.is_empty()
     }
@@ -491,7 +444,6 @@ impl<const S: usize> Recognizer<S> {
         self.earley_chart.last_mut().items.sort_unstable();
     }
 
-    #[cfg_attr(feature = "extra_inline", inline)]
     fn prediction_pass(&mut self) {
         // Iterate through medial items in the current set.
         let mut last = self.earley_chart.last_mut();
@@ -520,7 +472,6 @@ impl<const S: usize> Recognizer<S> {
         }
     }
 
-    #[cfg_attr(feature = "extra_inline", inline)]
     fn complete_medial_items(&mut self, earleme: usize, symbol: Symbol, right_node: NodeHandle) {
         let inner_start = {
             // we use binary search to narrow down the range of items.
@@ -545,7 +496,6 @@ impl<const S: usize> Recognizer<S> {
         }
     }
 
-    #[cfg_attr(feature = "extra_inline", inline)]
     fn complete_predictions(&mut self, earleme: usize, symbol: Symbol, node: NodeHandle) {
         // println!("{:?}", slice);
         for trans in &self.tables.completions[symbol.usize()] {
@@ -569,51 +519,22 @@ impl<const S: usize> Recognizer<S> {
         }
     }
 
-    #[cfg(feature = "simple")]
-    #[cfg_attr(feature = "extra_inline", inline)]
     fn complete_binary_predictions(&mut self, earleme: usize, symbol: Symbol, node: NodeHandle) {
-        // println!("{:?}", slice);
         let trans = self.tables.gen_completions[symbol.usize() - S];
         if self.earley_chart.predicted(earleme)[trans.top.usize()] {
-            if let Some(postdot) = self.tables.get_rhs1(trans.dot) {
-                self.earley_chart.medial().push(Item {
-                    origin: earleme,
-                    dot: trans.dot,
-                    node: node,
-                    postdot,
-                });
-            } else {
+            self.earley_chart.medial().push(Item {
+                origin: earleme,
+                dot: trans.dot,
+                node,
+                postdot: self.tables.get_rhs1(trans.dot).unwrap(),
+            });
+            if trans.is_unary {
                 self.complete.push(CompletedItem {
                     origin: earleme,
                     dot: trans.dot,
                     left_node: node,
                     right_node: None,
                 });
-            }
-        }
-    }
-
-    #[cfg(not(feature = "simple"))]
-    #[cfg_attr(feature = "extra_inline", inline)]
-    fn complete_binary_predictions(&mut self, earleme: usize, symbol: Symbol, node: NodeHandle) {
-        // println!("{:?}", slice);
-        for trans in &self.tables.completions[symbol.usize()] {
-            if self.earley_chart.predicted(earleme)[trans.top.usize()] {
-                if let Some(postdot) = self.tables.get_rhs1(trans.dot) {
-                    self.earley_chart.medial().push(Item {
-                        origin: earleme,
-                        dot: trans.dot,
-                        node: node,
-                        postdot,
-                    });
-                } else {
-                    self.complete.push(CompletedItem {
-                        origin: earleme,
-                        dot: trans.dot,
-                        left_node: node,
-                        right_node: None,
-                    });
-                }
             }
         }
     }
@@ -753,7 +674,6 @@ impl<const S: usize> Tables<S> {
             rules_by_rhs0: vec![],
             completions: vec![],
             symbol_names: grammar.symbol_names,
-            #[cfg(feature = "simple")]
             gen_completions: vec![Default::default(); grammar.gen_symbols as usize],
         };
         result.populate(grammar);
@@ -772,7 +692,8 @@ impl<const S: usize> Tables<S> {
                 let mut top = rule.lhs;
                 while top.usize() >= S {
                     // appears on only one rhs0
-                    let idx = self.rules_by_rhs0
+                    let idx = self
+                        .rules_by_rhs0
                         .binary_search_by_key(&top, |elem| elem.rhs0)
                         .expect("lhs not found");
                     top = self.rules_by_rhs0[idx].lhs;
@@ -809,13 +730,15 @@ impl<const S: usize> Tables<S> {
     }
 
     fn populate_completions(&mut self, grammar: &Grammar<S>) {
-        self.completions.resize(S + grammar.gen_symbols as usize, vec![]);
+        self.completions
+            .resize(S, vec![]);
         for (i, rule) in grammar.rules.iter().enumerate() {
             let rhs0 = rule.rhs0.usize();
             let mut top = rule.lhs;
             while top.usize() >= S {
                 // appears on only one rhs0
-                let idx = self.rules_by_rhs0
+                let idx = self
+                    .rules_by_rhs0
                     .binary_search_by_key(&top, |elem| elem.rhs0)
                     .expect("lhs not found");
                 top = self.rules_by_rhs0[idx].lhs;
@@ -826,9 +749,11 @@ impl<const S: usize> Tables<S> {
                 dot: i,
                 is_unary: rule.rhs1.is_none(),
             };
-            if rhs0 >= S && cfg!(feature = "simple") {
-                #[cfg(feature = "simple")] {
+            if rhs0 >= S {
+                if rule.rhs1.is_some() {
                     self.gen_completions[rhs0 - S] = transition;
+                } else {
+                    self.gen_completions[rhs0 - S].is_unary = true;
                 }
             } else {
                 self.completions[rhs0].push(transition);
@@ -849,7 +774,8 @@ impl<const S: usize> Tables<S> {
         let mut top = self.rules[dot].lhs;
         while top.usize() >= S {
             // appears on only one rhs0
-            let idx = self.rules_by_rhs0
+            let idx = self
+                .rules_by_rhs0
                 .binary_search_by_key(&top, |elem| elem.rhs0)
                 .expect("lhs not found");
             top = self.rules_by_rhs0[idx].lhs;
@@ -862,7 +788,8 @@ impl<const S: usize> Tables<S> {
         let mut top = self.rules[dot].rhs0;
         while top.usize() >= S {
             // appears on only one rhs0
-            let idx = self.rules_by_rhs0
+            let idx = self
+                .rules_by_rhs0
                 .binary_search_by_key(&top, |elem| elem.rhs0)
                 .expect("lhs not found");
             top = self.rules_by_rhs0[idx].lhs;
@@ -923,12 +850,10 @@ pub fn calc_recognizer() -> CalcRecognizer {
     }
 }
 
-#[cfg(feature = "forest_eval")]
 struct E {
     symbols: [Symbol; 13],
 }
 
-#[cfg(feature = "forest_eval")]
 impl self::forest::Eval for E {
     type Elem = Value;
 
@@ -942,7 +867,6 @@ impl self::forest::Eval for E {
         }
     }
 
-    #[cfg(any(feature = "vec_rel_compact_forest", feature = "nonrec_vec_rel_compact_forest"))]
     fn product(&self, action: u32, args: Vec<Self::Elem>) -> Self::Elem {
         let [sum, factor, op_mul, op_div, lparen, rparen, _expr_sym, op_minus, op_plus, _number, _whole, digit, dot] =
             self.symbols;
@@ -952,43 +876,6 @@ impl self::forest::Eval for E {
             args.get(0).cloned().unwrap_or(Value::None),
             args.get(1).cloned().unwrap_or(Value::None),
             args.get(2).cloned().unwrap_or(Value::None),
-        ) {
-            (2, Value::Float(left), _, Value::Float(right)) => Value::Float(left + right),
-            (3, Value::Float(left), _, Value::Float(right)) => Value::Float(left - right),
-            (4, val, Value::None, Value::None) => val,
-            (5, Value::Float(left), _, Value::Float(right)) => Value::Float(left * right),
-            (6, Value::Float(left), _, Value::Float(right)) => Value::Float(left / right),
-            (7, val, Value::None, Value::None) => val,
-            (8, _, val, _) => val,
-            (9, _, Value::Float(num), Value::None) => Value::Float(-num),
-            (10, Value::Digits(digits), Value::None, Value::None) => {
-                Value::Float(digits.parse::<f64>().unwrap())
-            }
-            (11, val @ Value::Digits(..), _, _) => val,
-            (12, Value::Digits(before_dot), _, Value::Digits(after_dot)) => {
-                let mut digits = before_dot;
-                digits.push('.');
-                digits.push_str(&after_dot[..]);
-                Value::Digits(digits)
-            }
-            (13, Value::Digits(mut num), Value::Digits(digit), _) => {
-                num.push_str(&digit[..]);
-                Value::Digits(num)
-            }
-            (14, val @ Value::Digits(..), _, _) => val,
-            args => panic!("unknown rule id {:?} or args {:?}", action, args),
-        }
-    }
-
-    #[cfg(not(any(feature = "vec_rel_compact_forest", feature = "nonrec_vec_rel_compact_forest")))]
-    fn product(&self, action: u32, args: &mut std::collections::LinkedList<Self::Elem>) -> Self::Elem {
-        let [sum, factor, op_mul, op_div, lparen, rparen, _expr_sym, op_minus, op_plus, _number, _whole, digit, dot] =
-            self.symbols;
-        match (
-            action,
-            args.pop_front().unwrap_or(Value::None),
-            args.pop_front().unwrap_or(Value::None),
-            args.pop_front().unwrap_or(Value::None),
         ) {
             (2, Value::Float(left), _, Value::Float(right)) => Value::Float(left + right),
             (3, Value::Float(left), _, Value::Float(right)) => Value::Float(left - right),
@@ -1047,91 +934,11 @@ impl CalcRecognizer {
             assert!(success, "parse failed at character {}", i);
         }
         let finished_node = self.recognizer.finished_node.expect("parse failed");
-        #[cfg(feature = "forest_eval")]
-        let result = self.recognizer.forest.evaluator(E { symbols }).evaluate(finished_node);
-        #[cfg(feature = "simple_forest")]
-        let mut evaluator = Evaluator::new(
-            #[cfg(all(not(feature = "simple_forest"), not(feature = "compact_forest"), not(feature = "linked_forest")))]
-            |rule_id, result: &[Value], args: &[usize]| {
-                // println!("{:?}", (rule_id, result, args));
-            match (
-                rule_id,
-                args.get(0).cloned().and_then(|a| result.get(a)).cloned().unwrap_or(Value::None),
-                args.get(1).cloned().and_then(|a| result.get(a)).cloned().unwrap_or(Value::None),
-                args.get(2).cloned().and_then(|a| result.get(a)).cloned().unwrap_or(Value::None),
-            ) {
-                (0, Value::Float(left), _, Value::Float(right)) => Value::Float(left + right),
-                (1, Value::Float(left), _, Value::Float(right)) => Value::Float(left - right),
-                (2, val, Value::None, Value::None) => val,
-                (3, Value::Float(left), _, Value::Float(right)) => Value::Float(left * right),
-                (4, Value::Float(left), _, Value::Float(right)) => Value::Float(left / right),
-                (5, val, Value::None, Value::None) => val,
-                (6, _, val, _) => val,
-                (7, _, Value::Float(num), Value::None) => Value::Float(-num),
-                (8, Value::Digits(digits), Value::None, Value::None) => {
-                    Value::Float(digits.parse::<f64>().unwrap())
-                }
-                (9, val @ Value::Digits(..), _, _) => val,
-                (10, Value::Digits(before_dot), _, Value::Digits(after_dot)) => {
-                    let mut digits = before_dot;
-                    digits.push('.');
-                    digits.push_str(&after_dot[..]);
-                    Value::Digits(digits)
-                }
-                (11, Value::Digits(mut num), Value::Digits(digit), _) => {
-                    num.push_str(&digit[..]);
-                    Value::Digits(num)
-                }
-                (12, val @ Value::Digits(..), _, _) => val,
-                args => panic!("unknown rule id {:?} or args {:?}", rule_id, args),
-            }},
-            #[cfg(feature = "simple_forest")]
-            |rule_id, args: &[Value]| {
-                // println!("{:?}", (rule_id, result, args));
-            match (
-                rule_id,
-                args.get(0).cloned().unwrap_or(Value::None),
-                args.get(1).cloned().unwrap_or(Value::None),
-                args.get(2).cloned().unwrap_or(Value::None),
-            ) {
-                (0, Value::Float(left), _, Value::Float(right)) => Value::Float(left + right),
-                (1, Value::Float(left), _, Value::Float(right)) => Value::Float(left - right),
-                (2, val, Value::None, Value::None) => val,
-                (3, Value::Float(left), _, Value::Float(right)) => Value::Float(left * right),
-                (4, Value::Float(left), _, Value::Float(right)) => Value::Float(left / right),
-                (5, val, Value::None, Value::None) => val,
-                (6, _, val, _) => val,
-                (7, _, Value::Float(num), Value::None) => Value::Float(-num),
-                (8, Value::Digits(digits), Value::None, Value::None) => {
-                    Value::Float(digits.parse::<f64>().unwrap())
-                }
-                (9, val @ Value::Digits(..), _, _) => val,
-                (10, Value::Digits(before_dot), _, Value::Digits(after_dot)) => {
-                    let mut digits = before_dot;
-                    digits.push('.');
-                    digits.push_str(&after_dot[..]);
-                    Value::Digits(digits)
-                }
-                (11, Value::Digits(mut num), Value::Digits(digit), _) => {
-                    num.push_str(&digit[..]);
-                    Value::Digits(num)
-                }
-                (12, val @ Value::Digits(..), _, _) => val,
-                args => panic!("unknown rule id {:?} or args {:?}", rule_id, args),
-            }},
-            #[cfg(feature = "simple_forest")]
-            |terminal, values| {
-                if terminal == digit {
-                    Value::Digits((values as u8 as char).to_string())
-                } else {
-                    Value::None
-                }
-            }
-        );
-        #[cfg(feature = "forest_size")]
-        panic!("{}", self.recognizer.forest.memory_use());
-        #[cfg(feature = "simple_forest")]
-        let result = evaluator.evaluate(&mut self.recognizer.forest, finished_node);
+        let result = self
+            .recognizer
+            .forest
+            .evaluator(E { symbols })
+            .evaluate(finished_node);
         if let Value::Float(num) = result {
             num
         } else {
@@ -1148,6 +955,13 @@ pub fn calc(expr: &str) -> f64 {
 #[test]
 fn test_parse() {
     assert_eq!(calc("1.0 + 2.0"), 3.0);
+}
+
+#[test]
+fn test_parse_big() {
+    assert_eq!(calc("1.0 + (2.0 * 3.0 + (1.0 + 2.0 * 3.0) + 1.0) + 2.0 * 3.0 / 1.0 + 2.0 \
+        * 3.01234234 + (2.0 * 3.0 + (1.0 + 2.0 * 3.0) + 1.0) + 2.0 * 3.0 / 1.0 + 2.0 * 3.01234234 + \
+        (2.0 * 3.0 + (1.0 + 2.0 * 3.0) + 1.0) + 2.0 * 3.0 / 1.0 + 2.0 * 3.01234234"), 79.07405404);
 }
 
 #[bench]
