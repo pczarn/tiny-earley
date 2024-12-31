@@ -269,7 +269,7 @@ impl<const S: usize> Grammar<S> {
         self
     }
 
-    fn sort_rules(&mut self) {
+    pub fn sort_rules(&mut self) {
         self.rules.sort_by(|a, b| a.lhs.cmp(&b.lhs));
     }
 
@@ -338,7 +338,7 @@ impl<const S: usize> Grammar<S> {
         self.rules.extend(new_rules);
     }
 
-    fn stringify_to_bnf(&self) -> String {
+    pub fn stringify_to_bnf(&self) -> String {
         use std::fmt::Write;
         let mut result = String::new();
         for (i, rule) in self.rules.iter().enumerate() {
@@ -414,7 +414,7 @@ impl<const S: usize> Recognizer<S> {
         }
     }
 
-    fn is_exhausted(&self) -> bool {
+    pub fn is_exhausted(&self) -> bool {
         self.earley_chart.next_medial().len() == 0 && self.complete.is_empty()
     }
 
@@ -540,7 +540,7 @@ impl<const S: usize> Recognizer<S> {
     }
 
     #[cfg(feature = "debug")]
-    fn log_last_earley_set(&self) {
+    pub fn log_last_earley_set(&self) {
         let dots = self.dots_for_log(self.earley_chart.last());
         for (rule_id, dots) in dots {
             print!(
@@ -566,7 +566,7 @@ impl<const S: usize> Recognizer<S> {
     }
 
     #[cfg(feature = "debug")]
-    fn log_earley_set_diff(&self) {
+    pub fn log_earley_set_diff(&self) {
         use std::collections::{BTreeMap, BTreeSet};
         let dots_last_by_id = self.dots_for_log(self.earley_chart.next_to_last());
         let mut dots_next_by_id = self.dots_for_log(self.earley_chart.last());
