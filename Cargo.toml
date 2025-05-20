@@ -12,6 +12,7 @@ path = "bench_parser.rs"
 [dependencies]
 rayon = { version = "1.10", optional = true }
 c_lexer_logos = "0.1"
+elsa = { version = "1.11", features = ["indexmap"], optional = true }
 
 [dev-dependencies]
 
@@ -19,5 +20,7 @@ c_lexer_logos = "0.1"
 opt-level = 3               # Use slightly better optimizations.
 
 [features]
-default = ["debug"]
+default = ["debug", "load"]
 debug = []
+nightly = []
+load = ["dep:elsa"]
