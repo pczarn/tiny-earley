@@ -1,6 +1,6 @@
 #![cfg_attr(feature = "nightly", feature(test))]
 
-mod forest;
+pub mod forest;
 #[cfg(feature = "load")]
 pub mod load;
 
