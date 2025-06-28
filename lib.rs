@@ -1,5 +1,7 @@
 #![cfg_attr(feature = "nightly", feature(test))]
 
+#![deny(unsafe_code)]
+
 pub mod forest;
 #[cfg(feature = "load")]
 pub mod load;
