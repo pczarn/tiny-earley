@@ -799,7 +799,7 @@ fn bench_parse_c(b: &mut test::Bencher, contents: &str) {
             let success = rec.end_earleme();
             #[cfg(feature = "debug")]
             if !success {
-                rec.log_earley_set_diff();
+                println!("{}", rec.earley_set_diff());
             }
             assert!(success, "parse failed at character {}", i);
         } else {

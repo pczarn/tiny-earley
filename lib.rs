@@ -562,8 +562,9 @@ impl<const S: usize> Recognizer<S> {
         println!();
     }
 
-    #[cfg(feature = "debug")]
-    pub fn log_earley_set_diff(&self) {
+    pub fn earley_set_diff(&self) -> String {
+        let mut result = String::new();
+        use std::fmt::Write;
         use std::collections::{BTreeMap, BTreeSet};
         let dots_last_by_id = self.dots_for_log(self.earley_chart.next_to_last());
         let mut dots_next_by_id = self.dots_for_log(self.earley_chart.last());
@@ -583,60 +584,56 @@ impl<const S: usize> Recognizer<S> {
                 .or_insert(BTreeSet::new())
                 .insert(item.origin);
         }
+        let mut joined: BTreeMap<usize, BTreeMap<usize, (BTreeSet<usize>, BTreeSet<_>)>> = BTreeMap::new();
+        for (rule_id, map) in dots_last_by_id {
+            for (pos, set) in map {
+                joined.entry(rule_id).or_insert(BTreeMap::new()).entry(pos).or_insert((BTreeSet::new(), BTreeSet::new())).0.extend(set);
+            }
+        }
+        for (rule_id, map) in dots_next_by_id {
+            for (pos, set) in map {
+                joined.entry(rule_id).or_insert(BTreeMap::new()).entry(pos).or_insert((BTreeSet::new(), BTreeSet::new())).1.extend(set);
+            }
+        }
         let mut empty_diff = true;
-        for rule_id in rule_ids {
-            let dots_last = dots_last_by_id.get(&rule_id);
-            let dots_next = dots_next_by_id.get(&rule_id);
-            if dots_last == dots_next {
-                continue;
-            }
+        for (rule_id, dots) in joined {
+            // let dots_last = dots_last_by_id.get(&rule_id).unwrap_or(BTreeMap::new());
+            // let dots_next = dots_next_by_id.get(&rule_id);
+            // if dots_last == dots_next {
+            //     continue;
+            // }
             empty_diff = false;
-            print!(
-                "from {} ::= ",
+            write!(
+                result,
+                "diff {} ::= ",
                 self.tables.symbol_names[self.tables.get_top_lhs(rule_id).usize()]
             );
-            if let Some(origins) = dots_last.and_then(|d| d.get(&0)) {
-                print!("{:?}", origins);
+            if let Some(&(ref a, ref b)) = dots.get(&0) {
+                write!(result, "{:?}=>{:?}", a, b);
             }
-            print!(
+            write!(
+                result,
                 " {} ",
                 self.tables.symbol_names[self.tables.get_top_rhs0(rule_id).usize()]
             );
-            if let Some(origins) = dots_last.and_then(|d| d.get(&1)) {
-                print!("{:?}", origins);
+            if let Some(&(ref a, ref b)) = dots.get(&1) {
+                write!(result, "{:?}=>{:?}", a, b);
             }
             if let Some(rhs1) = self.tables.get_rhs1(rule_id) {
-                print!(" {} ", self.tables.symbol_names[rhs1.usize()]);
+                write!(result, " {} ", self.tables.symbol_names[rhs1.usize()]);
             }
-            println!();
-            print!(
-                "to   {} ::= ",
-                self.tables.symbol_names[self.tables.get_top_lhs(rule_id).usize()]
-            );
-            if let Some(origins) = dots_next.and_then(|d| d.get(&0)) {
-                print!("{:?}", origins);
+            if let Some(&(ref a, ref b)) = dots.get(&2) {
+                write!(result, "{:?}=>{:?}", a, b);
             }
-            print!(
-                " {} ",
-                self.tables.symbol_names[self.tables.get_top_rhs0(rule_id).usize()]
-            );
-            if let Some(origins) = dots_next.and_then(|d| d.get(&1)) {
-                print!("{:?}", origins);
-            }
-            if let Some(rhs1) = self.tables.get_rhs1(rule_id) {
-                print!(" {} ", self.tables.symbol_names[rhs1.usize()]);
-            }
-            if let Some(origins) = dots_next.and_then(|d| d.get(&2)) {
-                print!("{:?}", origins);
-            }
-            println!();
+            writeln!(result, "");
         }
         if empty_diff {
-            println!("no diff");
-            println!();
+            writeln!(result, "no diff");
+            writeln!(result, "");
         } else {
-            println!();
+            writeln!(result, "");
         }
+        result
     }
 
     #[cfg(feature = "debug")]
@@ -926,7 +923,7 @@ impl CalcRecognizer {
             let success = self.recognizer.end_earleme();
             #[cfg(feature = "debug")]
             if !success {
-                self.recognizer.log_earley_set_diff();
+                println!("{}", self.recognizer.earley_set_diff());
             }
             assert!(success, "parse failed at character {}", i);
         }
