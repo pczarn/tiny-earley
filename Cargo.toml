@@ -2,6 +2,10 @@
 name = "tiny-earley"
 version = "0.2.0"
 edition = "2021"
+description = "Minimalistic implementation of Earley's algorithm"
+license = "Apache-2.0 OR MIT"
+repository = "https://github.com/pczarn/tiny-earley"
+homepage = "https://pczarn.github.io/"
 
 [lib]
 path = "lib.rs"
